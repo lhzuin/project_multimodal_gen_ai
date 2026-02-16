@@ -1,0 +1,6 @@
+torch
+albumentations
+cairosvg
+chess
+python-chess 
+pillow
