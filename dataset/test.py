@@ -53,3 +53,7 @@ def main():
 if __name__ == "__main__":
     # If you ever freeze to an executable, you'd add freeze_support() here.
     main()
+
+
+    #Ideas: turn the board depending on who's turn is it
+    #Adding a pool of different sprites and backgrounds and choose them randomly to create variety

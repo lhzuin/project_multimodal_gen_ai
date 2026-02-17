@@ -128,11 +128,10 @@ class ChessGameSampleDataset(Dataset):
 
                 meta_turn.append(torch.tensor(1 if board.turn else 0, dtype=torch.long))  # 1=w,0=b
                 # castling: 4 bits KQkq
-                rights = board.castling_rights
-                ck = int(bool(rights & chess.BB_H1))
-                cq = int(bool(rights & chess.BB_A1))
-                ck2 = int(bool(rights & chess.BB_H8))
-                cq2 = int(bool(rights & chess.BB_A8))
+                ck  = int(board.has_kingside_castling_rights(chess.WHITE))
+                cq  = int(board.has_queenside_castling_rights(chess.WHITE))
+                ck2 = int(board.has_kingside_castling_rights(chess.BLACK))
+                cq2 = int(board.has_queenside_castling_rights(chess.BLACK))
                 meta_castling.append(torch.tensor([ck, cq, ck2, cq2], dtype=torch.long))
                 meta_ep.append(torch.tensor(board.ep_square if board.ep_square is not None else -1, dtype=torch.long))
 
