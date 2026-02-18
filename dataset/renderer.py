@@ -1,4 +1,5 @@
 import os
+import random
 import numpy as np
 from PIL import Image
 import chess
@@ -20,6 +21,15 @@ PIECE_TO_ID = {
 }
 
 ID_TO_PIECE = {v: k for k, v in PIECE_TO_ID.items()}
+
+# Color pairs for board rendering (light_rgb, dark_rgb)
+COLOR_PAIRS = [
+    ((240, 217, 181), (181, 136, 99)),      # Original tan/brown
+    ((235, 236, 208), (119, 149, 83)),      # Green
+    ((240, 217, 181), (100, 150, 200)),     # Blue
+    ((220, 220, 220), (100, 100, 100)),     # Gray
+    ((230, 200, 240), (150, 100, 150)),     # Purple
+]
 
 def board_to_grid_ids(board: chess.Board) -> np.ndarray:
     """Return (8,8) IDs from rank 8->1, file a->h."""
@@ -53,12 +63,9 @@ class SpriteBoardRenderer:
         self,
         sprites_dir: str,
         square_px: int = 64,
-        light_rgb=(240, 217, 181),
-        dark_rgb=(181, 136, 99),
     ):
         self.square_px = int(square_px)
-        self.light_rgb = tuple(light_rgb)
-        self.dark_rgb = tuple(dark_rgb)
+        self.color_pairs = COLOR_PAIRS
 
         self.sprites = {}
 
@@ -72,7 +79,11 @@ class SpriteBoardRenderer:
     def render(self, board: chess.Board, out_size: int) -> Image.Image:
         """
         Render board to a square PIL image of size (out_size, out_size).
+        Randomly selects one of the predefined color pairs.
         """
+        # Randomly select color pair
+        light_rgb, dark_rgb = random.choice(self.color_pairs)
+        
         sq = self.square_px
         board_img = Image.new("RGBA", (8*sq, 8*sq), (0,0,0,0))
 
@@ -80,7 +91,7 @@ class SpriteBoardRenderer:
         for r in range(8):
             for c in range(8):
                 is_light = ((r + c) % 2 == 0)
-                color = self.light_rgb if is_light else self.dark_rgb
+                color = light_rgb if is_light else dark_rgb
                 tile = Image.new("RGBA", (sq, sq), color + (255,))
                 board_img.paste(tile, (c*sq, r*sq))
 
