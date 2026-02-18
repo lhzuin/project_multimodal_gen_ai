@@ -58,6 +58,7 @@ def encode_move_from_board(board: chess.Board, move: chess.Move):
 class SpriteBoardRenderer:
     """
     Render a top-down chessboard image using piece sprites.
+    Supports multiple sprite styles in subdirectories.
     """
     def __init__(
         self,
@@ -66,23 +67,56 @@ class SpriteBoardRenderer:
     ):
         self.square_px = int(square_px)
         self.color_pairs = COLOR_PAIRS
-
-        self.sprites = {}
-
+        
+        # Load sprite styles from subdirectories
+        self.sprite_styles = {}
+        
+        # Check if sprites_dir itself contains piece files (legacy single style)
+        legacy_style_path = sprites_dir
+        if self._has_piece_files(legacy_style_path):
+            self.sprite_styles["default"] = self._load_sprites_from_dir(legacy_style_path)
+        
+        # Load sprite styles from subdirectories
+        if os.path.isdir(sprites_dir):
+            for item in os.listdir(sprites_dir):
+                item_path = os.path.join(sprites_dir, item)
+                if os.path.isdir(item_path) and self._has_piece_files(item_path):
+                    self.sprite_styles[item] = self._load_sprites_from_dir(item_path)
+        
+        if not self.sprite_styles:
+            raise FileNotFoundError(
+                f"No sprite styles found in {sprites_dir}. "
+                f"Organize sprites as: {sprites_dir}/style1/ with piece files, "
+                f"or place piece files directly in {sprites_dir}/"
+            )
+    
+    def _has_piece_files(self, directory: str) -> bool:
+        """Check if directory contains all required piece files."""
+        if not os.path.isdir(directory):
+            return False
+        for sym in PIECE_SYMBOLS:
+            fname = FILE_FOR_SYMBOL[sym]
+            if not os.path.exists(os.path.join(directory, fname)):
+                return False
+        return True
+    
+    def _load_sprites_from_dir(self, directory: str) -> dict:
+        """Load all sprite images from a directory."""
+        sprites = {}
         for sym, fname in FILE_FOR_SYMBOL.items():
-            path = os.path.join(sprites_dir, fname)
-            if not os.path.exists(path):
-                raise FileNotFoundError(f"Missing sprite: {path}")
+            path = os.path.join(directory, fname)
             img = Image.open(path).convert("RGBA")
-            self.sprites[sym] = img
+            sprites[sym] = img
+        return sprites
 
     def render(self, board: chess.Board, out_size: int) -> Image.Image:
         """
         Render board to a square PIL image of size (out_size, out_size).
-        Randomly selects one of the predefined color pairs.
+        Randomly selects color pair and sprite style.
         """
-        # Randomly select color pair
+        # Randomly select color pair and sprite style
         light_rgb, dark_rgb = random.choice(self.color_pairs)
+        sprites = random.choice(list(self.sprite_styles.values()))
         
         sq = self.square_px
         board_img = Image.new("RGBA", (8*sq, 8*sq), (0,0,0,0))
@@ -102,7 +136,7 @@ class SpriteBoardRenderer:
                 if piece is None:
                     continue
                 sym = piece.symbol()  # "P" or "p", etc
-                spr = self.sprites[sym]
+                spr = sprites[sym]
 
                 # resize sprite to fit square (keep aspect)
                 spr_resized = spr.resize((sq, sq), resample=Image.Resampling.LANCZOS)
