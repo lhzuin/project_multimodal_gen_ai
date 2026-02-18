@@ -6,6 +6,12 @@ from augmentations import make_albu_augment
 from dataset import ChessGameSampleDataset
 from collate import collate_positions_from_games
 
+from pathlib import Path
+
+HERE = Path(__file__).resolve().parent                 # .../dataset
+PROJECT_ROOT = HERE.parent                             # .../project_multimodal_gen_ai
+SPRITES_DIR = PROJECT_ROOT / "dataset" / "sprites"     # .../project_multimodal_gen_ai/dataset/sprites
+print(f"Using sprites from {SPRITES_DIR}")
 def main():
     # 0) Download + merge TWIC PGNs (do this once, or keep updating weekly)
     zips = download_twic_zips(twic_range(1601, 1610), out_dir="twic_zips")
@@ -19,7 +25,7 @@ def main():
     ds = ChessGameSampleDataset(
         pgn_path="games.pgn",
         index_path="games_index.json",
-        sprites_dir="project_multimodal_gen_ai/dataset/sprites/",
+        sprites_dir=str(SPRITES_DIR),
         resolution=256,
         sample_ratio=0.10,
         max_positions_per_game=32,
