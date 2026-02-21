@@ -1,0 +1,83 @@
+experiment_name: "chess_classifier_vit_v1"
+wandb_project: "chess_vision"
+log: true
+seed: 42
+acc_epsilon: 1e-3
+img_resolution: 256
+
+checkpoint_save_path: ${experiment_name}.pt
+
+use_warmup: true
+
+data:
+  val_fraction: 0.05
+
+dataloader:
+  batch_size: 8
+  shuffle: true
+  num_workers: 4
+  pin_memory: false
+  persistent_workers: true
+  drop_last: false
+
+train_stages:
+  - name: stage1
+    epochs: 2
+    warmup_fraction: 0.02
+    lr_scheduler: constant_with_warmup
+    groups:
+      encoder: lr_enc
+      classifier: lr_class
+
+early_stopping:
+  patience: 2
+  min_epochs: 2
+
+collate:
+  _target_: dataset.collate.CollatePositionsFromGames
+
+dataset_train:
+  _target_: dataset.dataset.ChessGameSampleDataset
+  pgn_path: games.pgn
+  index_path: games_index.json
+  sprites_dir: ${hydra:runtime.cwd}/../dataset/sprites
+  resolution: ${img_resolution}
+  sample_ratio: 0.10
+  max_positions_per_game: 32
+  seed: ${seed}
+  apply_augmentations: true
+  return_fen: false
+
+dataset_val:
+  _target_: dataset.dataset.ChessGameSampleDataset
+  pgn_path: games.pgn
+  index_path: games_index.json
+  sprites_dir: ${hydra:runtime.cwd}/../dataset/sprites
+  resolution: ${img_resolution}
+  sample_ratio: 0.10
+  max_positions_per_game: 32
+  seed: ${seed}
+  apply_augmentations: false 
+  return_fen: false
+
+model:
+  instance:
+    _target_: models.chess_visual_classifier.ChessVisualClassifierTransformers
+    img_size: ${img_resolution}
+    patch_size: 32
+    encoder_dim: 256
+    n_heads: 4
+    n_layers: 6
+    encoder_dropout: 0.1
+    head_hidden_dim: 512
+    head_dropout: 0.1
+
+optim:
+  _target_: torch.optim.AdamW
+  lr_class: 5e-4
+  lr_enc: 1e-5
+  lr: 2e-4 # base lr (unused directly; AdamW needs it)
+  weight_decay: 0.01
+
+loss_fn:
+  _target_: torch.nn.CrossEntropyLoss

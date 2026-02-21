@@ -8,14 +8,6 @@ import requests
 
 TWIC_ZIP_URL = "https://theweekinchess.com/zips/twic{n}g.zip"  # url pattern  [oai_citation:1‡Gist](https://gist.github.com/roryk/ba72531b3b0f423dc8b9bd69beb63f8e?utm_source=chatgpt.com)
 
-# def download_file(url: str, dst_path: str, chunk_size: int = 1 << 20) -> None:
-#     Path(dst_path).parent.mkdir(parents=True, exist_ok=True)
-#     with requests.get(url, stream=True, timeout=60) as r:
-#         r.raise_for_status()
-#         with open(dst_path, "wb") as f:
-#             for chunk in r.iter_content(chunk_size=chunk_size):
-#                 if chunk:
-#                     f.write(chunk)
 
 def download_file(url: str, dst_path: str, chunk_size: int = 1 << 20) -> None:
     Path(dst_path).parent.mkdir(parents=True, exist_ok=True)

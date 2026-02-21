@@ -2,7 +2,6 @@ from twic_download import download_twic_zips, build_merged_pgn_from_zips, twic_r
 from offsets import ensure_offsets
 from torch.utils.data import DataLoader
 
-from augmentations import make_albu_augment
 from dataset import ChessGameSampleDataset
 from collate import collate_positions_from_games
 
@@ -12,6 +11,11 @@ HERE = Path(__file__).resolve().parent                 # .../dataset
 PROJECT_ROOT = HERE.parent                             # .../project_multimodal_gen_ai
 SPRITES_DIR = PROJECT_ROOT / "dataset" / "sprites"     # .../project_multimodal_gen_ai/dataset/sprites
 print(f"Using sprites from {SPRITES_DIR}")
+
+
+
+
+
 def main():
     # 0) Download + merge TWIC PGNs (do this once, or keep updating weekly)
     zips = download_twic_zips(twic_range(1601, 1610), out_dir="twic_zips")
@@ -21,7 +25,6 @@ def main():
     ensure_offsets("games.pgn", "games_index.json")
 
     # 2) Dataset
-    augment = make_albu_augment(256)
     ds = ChessGameSampleDataset(
         pgn_path="games.pgn",
         index_path="games_index.json",
@@ -30,7 +33,7 @@ def main():
         sample_ratio=0.10,
         max_positions_per_game=32,
         seed=42,
-        augment=augment,
+        apply_augmentations=True,
         return_fen=False,
     )
 

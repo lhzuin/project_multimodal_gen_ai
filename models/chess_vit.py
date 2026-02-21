@@ -128,25 +128,9 @@ class ChessVit(nn.Module):
 
 
 
-class PieceClassifierHead(nn.Module):
-    num_classes = 13
-    def __init__(self, encoder_dim=256, hidden_dim=512, dropout=0.1):
-        super().__init__()
-        self.fc1 = nn.Linear(encoder_dim, hidden_dim)
-        self.activation_func = nn.ReLU()
-        self.dropout = nn.Dropout(dropout)
-        self.fc2 = nn.Linear(hidden_dim, self.num_classes)
-
-    def forward(self, x):
-        # x: [B, 64, D]
-        x = self.activation_func(self.fc1(x))
-        x = self.dropout(x)
-        x = self.fc2(x)  # [B, 64, 13]
-        return x
 
 
 
-
-class SSLHead(nn.Module):
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
+# class SSLHead(nn.Module):
+#     def __init__(self, *args, **kwargs):
+#         super().__init__(*args, **kwargs)

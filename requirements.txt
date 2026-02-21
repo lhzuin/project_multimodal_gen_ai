@@ -4,3 +4,5 @@ cairosvg
 chess
 python-chess 
 pillow
+wandb
+hydra
