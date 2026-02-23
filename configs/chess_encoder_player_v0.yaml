@@ -1,4 +1,4 @@
-experiment_name: "chess_encoder_player_v1"
+experiment_name: "chess_encoder_player_v0"
 wandb_project: "chess_vision"
 log: true
 seed: 42
@@ -11,7 +11,7 @@ use_legal_mask: true
 train_input: pieces   # or "image"
 
 trainer:
-  grad_accum_steps: 1 #4        # 256*4 = global batch 1024 (recommended)  [oai_citation:9‡Literature‑backed hyperparameters for a small–medium Transformer chess policy network.pdf](sediment://file_00000000921472468c25bbb345c81e8d)
+  grad_accum_steps: 1        # 256*4 = global batch 1024 (recommended)  [oai_citation:9‡Literature‑backed hyperparameters for a small–medium Transformer chess policy network.pdf](sediment://file_00000000921472468c25bbb345c81e8d)
   grad_clip_norm: 1.0
 
 data:
@@ -90,8 +90,8 @@ optim:
   _target_: torch.optim.AdamW
   betas: [0.9, 0.98]         # recommended default  [oai_citation:12‡Literature‑backed hyperparameters for a small–medium Transformer chess policy network.pdf](sediment://file_00000000921472468c25bbb345c81e8d)
   eps: 1.0e-8                # recommended default  [oai_citation:13‡Literature‑backed hyperparameters for a small–medium Transformer chess policy network.pdf](sediment://file_00000000921472468c25bbb345c81e8d)
-  lr_enc: 4e-4               # at global batch 1024  [oai_citation:14‡Literature‑backed hyperparameters for a small–medium Transformer chess policy network.pdf](sediment://file_00000000921472468c25bbb345c81e8d)
-  lr_class: 6e-4             # head ≈ 1.5× encoder  [oai_citation:15‡Literature‑backed hyperparameters for a small–medium Transformer chess policy network.pdf](sediment://file_00000000921472468c25bbb345c81e8d)
+  lr_enc: 7e-5               # at global batch 1024  [oai_citation:14‡Literature‑backed hyperparameters for a small–medium Transformer chess policy network.pdf](sediment://file_00000000921472468c25bbb345c81e8d)
+  lr_class: 3e-4             # head ≈ 1.5× encoder  [oai_citation:15‡Literature‑backed hyperparameters for a small–medium Transformer chess policy network.pdf](sediment://file_00000000921472468c25bbb345c81e8d)
   weight_decay: 0.01
 
 loss_fn:

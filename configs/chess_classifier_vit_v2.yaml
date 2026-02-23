@@ -11,7 +11,7 @@ use_warmup: true
 
 data:
   val_fraction: 0.05
-  samples_path: ${hydra:runtime.cwd}/processed_games/games_samples_s${seed}_r0.1_m32.json
+  samples_path: ${hydra:runtime.cwd}/processed_games/games_samples_s${seed}_r0.15_m32.json
 
 dataloader:
   batch_size: 64

@@ -148,6 +148,9 @@ class Trainer:
         opt_kwargs["_target_"] = target
         self.opt_cfg = opt_kwargs
 
+        self.grad_accum_steps = int(getattr(cfg, "trainer", {}).get("grad_accum_steps", 1))
+        self.grad_clip_norm = float(getattr(cfg, "trainer", {}).get("grad_clip_norm", 1.0))
+
     def init_data(self):
         # Dataset + collate from Hydra
         self.train_dataset = hydra.utils.instantiate(self.cfg.dataset_train)
@@ -250,12 +253,13 @@ class Trainer:
         self.model.train()
         total_loss, total_correct, total_n = 0.0, 0, 0
 
+        accum = 0
+        self.optimizer.zero_grad(set_to_none=True)
+
         progress = tqdm(self.train_loader, desc=f"{stage_name} | training", leave=False)
         for batch in progress:
             if batch_is_empty(batch):
                 continue
-
-            self.optimizer.zero_grad(set_to_none=True)
 
             if self.scaler:
                 with autocast(device_type=self.device.type):
@@ -263,22 +267,19 @@ class Trainer:
                     if res is None:
                         continue
                     loss, correct, n = res
-                self.scaler.scale(loss).backward()
-                torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
-                self.scaler.step(self.optimizer)
-                self.scaler.update()
+                    loss_scaled = loss / self.grad_accum_steps
+
+                self.scaler.scale(loss_scaled).backward()
             else:
                 res = self._forward_loss_and_metrics(batch)
                 if res is None:
                     continue
                 loss, correct, n = res
-                loss.backward()
-                torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
-                self.optimizer.step()
+                (loss / self.grad_accum_steps).backward()
 
-            if scheduler:
-                scheduler.step()
+            accum += 1
 
+            # --- logging stays per *micro-batch* exactly like before ---
             loss_val = float(loss.detach().cpu().item())
             total_loss += loss_val * n
             total_correct += correct
@@ -293,6 +294,29 @@ class Trainer:
                     f"{stage_name}/acc_step": acc_val,
                     "aggregate/loss_step": loss_val,
                 })
+
+            # --- optimizer/scheduler step only every grad_accum_steps ---
+            if accum % self.grad_accum_steps == 0:
+                if self.scaler:
+                    # IMPORTANT: unscale before clipping when using GradScaler
+                    self.scaler.unscale_(self.optimizer)
+                    torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=self.grad_clip_norm)
+
+                    self.scaler.step(self.optimizer)
+                    self.scaler.update()
+                else:
+                    torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=self.grad_clip_norm)
+                    self.optimizer.step()
+
+                self.optimizer.zero_grad(set_to_none=True)
+
+                if scheduler:
+                    scheduler.step()
+
+        # If last partial accumulation didn't trigger a step, you can either:
+        # (A) ignore it (common), or
+        # (B) step once more to not waste gradients.
+        # Minimal behavior: DO NOT step here (keeps semantics stable).
 
         return (total_loss / max(1, total_n)), (total_correct / max(1, total_n))
 
