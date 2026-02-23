@@ -7,20 +7,21 @@ from typing import Optional
 from models.chess_tokenizer import ChessTokenizer
 from dataset.offsets import load_pgn_offsets
 
+
 class PGNMoveDataset(Dataset):
     def __init__(
         self,
         pgn_path: str,
         index_path: str,
-        tokenizer: ChessTokenizer,
-        block_size: Optional[int] = None,  # if set, sample random window
+        tokenizer_path: str,                 
+        block_size: Optional[int] = None,
         strict: bool = True,
         seed: int = 0,
     ):
         self.pgn_path = pgn_path
         self.index = load_pgn_offsets(index_path)
         self.games = self.index["games"]
-        self.tok = tokenizer
+        self.tok = ChessTokenizer(tokenizer_path)   
         self.block_size = block_size
         self.strict = strict
         self.rng = random.Random(seed)
@@ -59,9 +60,31 @@ class PGNMoveDataset(Dataset):
                 start = self.rng.randrange(0, len(move_ids) - self.block_size + 1)
                 move_ids = move_ids[start:start + self.block_size]
                 piece_ids = piece_ids[start:start + self.block_size]
+            else:
+                start = 0
+        
+        bos_id = self.tok.bos_id
+        # global index of first move token (exclude BOS if present)
+        global_first_token_idx = start
+        if global_first_token_idx == 0 and len(move_ids) > 0 and move_ids[0] == bos_id:
+            # window begins with BOS, first move token is next one in the window
+            ply_before = 0
+        else:
+            # if the full stream had BOS, then token index 1 corresponds to ply 0.
+            # So ply_before = (global_first_token_idx - 1) if BOS was in original stream.
+            had_bos = (len(move_ids) > 0 and move_ids[0] == bos_id) or True  # encode_pgn_game adds BOS by default
+            ply_before = max(0, global_first_token_idx - 1) if had_bos else global_first_token_idx
 
+        board = game.board()
+        moves = list(game.mainline_moves())
+        # replay exactly ply_before moves
+        for k in range(min(ply_before, len(moves))):
+            board.push(moves[k])
+
+        start_turn = 0 if board.turn == chess.WHITE else 1
         return {
             "valid": True,
             "move_ids": torch.tensor(move_ids, dtype=torch.long),
             "piece_ids": torch.tensor(piece_ids, dtype=torch.long),
+            "start_turn": torch.tensor(start_turn, dtype=torch.long),
         }

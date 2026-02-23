@@ -1,0 +1,98 @@
+experiment_name: "chess_encoder_player_v2"
+wandb_project: "chess_vision"
+log: true
+seed: 42
+acc_epsilon: 1e-3
+img_resolution: 256
+
+checkpoint_save_path: ${experiment_name}.pt
+use_warmup: true
+use_legal_mask: true
+train_input: pieces   # or "image"
+
+trainer:
+  grad_accum_steps: 1 #4        # 256*4 = global batch 1024 (recommended)  [oai_citation:9‡Literature‑backed hyperparameters for a small–medium Transformer chess policy network.pdf](sediment://file_00000000921472468c25bbb345c81e8d)
+  grad_clip_norm: 1.0
+
+data:
+  val_fraction: 0.05
+  samples_path: ${hydra:runtime.cwd}/processed_games/games_samples_s${seed}_r0.15_m32.json
+
+dataloader:
+  batch_size: 64
+  shuffle: true
+  num_workers: 4
+  pin_memory: false
+  persistent_workers: true
+  drop_last: false
+
+train_stages:
+  - name: stage1
+    epochs: 10
+    warmup_fraction: 0.05
+    lr_scheduler: cosine
+    groups:
+      encoder: lr_enc
+      classifier: lr_class
+
+early_stopping:
+  patience: 2
+  min_epochs: 2
+
+collate:
+  _target_: dataset.collate.CollatePositionsFromGames
+
+dataset_train:
+  _target_: dataset.dataset.ChessGameSampleDataset
+  pgn_path: ${hydra:runtime.cwd}/processed_games/games.pgn
+  index_path: ${hydra:runtime.cwd}/processed_games/games_index.json
+  samples_path: ${data.samples_path}
+  cache_size: 64
+  sprites_dir: ${hydra:runtime.cwd}/dataset/sprites
+  resolution: ${img_resolution}
+  sample_ratio: 0.15
+  max_positions_per_game: 32
+  seed: ${seed}
+  apply_augmentations: false #true
+  return_fen: true        # IMPORTANT for legal masking
+  return_images: false
+  return_piece_probs: true
+
+dataset_val:
+  _target_: dataset.dataset.ChessGameSampleDataset
+  pgn_path: ${hydra:runtime.cwd}/processed_games/games.pgn
+  index_path: ${hydra:runtime.cwd}/processed_games/games_index.json
+  samples_path: ${data.samples_path}
+  cache_size: 64
+  sprites_dir: ${hydra:runtime.cwd}/dataset/sprites
+  resolution: ${img_resolution}
+  sample_ratio: 0.15
+  max_positions_per_game: 32
+  seed: ${seed}
+  apply_augmentations: false
+  return_fen: true        # IMPORTANT
+  return_images: false
+  return_piece_probs: true
+
+model:
+  instance:
+    _target_: models.chess_encoder_player.ChessEncoderPlayer
+    img_size: ${img_resolution}
+    vit_path: ${hydra:runtime.cwd}/checkpoints/chess_classifier_vit_v2.pt
+    freeze_vit: true
+    ep_embed_dim: 16
+    encoder_dim: 256
+    n_heads: 4
+    n_layers: 6
+    encoder_dropout: 0.1
+
+optim:
+  _target_: torch.optim.AdamW
+  betas: [0.9, 0.98]         # recommended default  [oai_citation:12‡Literature‑backed hyperparameters for a small–medium Transformer chess policy network.pdf](sediment://file_00000000921472468c25bbb345c81e8d)
+  eps: 1.0e-8                # recommended default  [oai_citation:13‡Literature‑backed hyperparameters for a small–medium Transformer chess policy network.pdf](sediment://file_00000000921472468c25bbb345c81e8d)
+  lr_enc: 2e-4               # at global batch 1024  [oai_citation:14‡Literature‑backed hyperparameters for a small–medium Transformer chess policy network.pdf](sediment://file_00000000921472468c25bbb345c81e8d)
+  lr_class: 6e-4             # head ≈ 1.5× encoder  [oai_citation:15‡Literature‑backed hyperparameters for a small–medium Transformer chess policy network.pdf](sediment://file_00000000921472468c25bbb345c81e8d)
+  weight_decay: 0.01
+
+loss_fn:
+  _target_: torch.nn.CrossEntropyLoss
