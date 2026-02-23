@@ -121,6 +121,8 @@ class ChessGameSampleDataset(Dataset):
         return_fen: bool = False,
         samples_path: Optional[str] = None,
         cache_size: int = 64,   # LRU of move-lists per worker
+        return_images: bool = True,
+        return_piece_probs: bool = True,
     ):
         self.pgn_path = pgn_path
         self.index_path = index_path
@@ -129,6 +131,8 @@ class ChessGameSampleDataset(Dataset):
         self.max_positions_per_game = int(max_positions_per_game)
         self.seed = int(seed)
         self.return_fen = bool(return_fen)
+        self.return_images = bool(return_images)
+        self.return_piece_probs = bool(return_piece_probs)
 
         # Augmentation is applied only to rendered image
         self.augment = make_albu_augment(self.resolution) if apply_augmentations else None
@@ -274,6 +278,11 @@ class ChessGameSampleDataset(Dataset):
         grid = board_to_grid_ids(board)
         labels64 = torch.from_numpy(grid.reshape(-1)).long()
 
+        piece_probs = None
+        if self.return_piece_probs:
+            # one-hot: [64,13] float
+            piece_probs = torch.nn.functional.one_hot(labels64, num_classes=13).float()
+
         turn = torch.tensor(1 if board.turn else 0, dtype=torch.long)
         ck  = int(board.has_kingside_castling_rights(chess.WHITE))
         cq  = int(board.has_queenside_castling_rights(chess.WHITE))
@@ -289,12 +298,14 @@ class ChessGameSampleDataset(Dataset):
         move_promo = torch.tensor(pr, dtype=torch.long)
 
         # render current board
-        img = self.renderer.render(board, out_size=self.resolution)
-        if self.augment is not None:
-            np_img = np.asarray(img, dtype=np.uint8)
-            np_img = self.augment(np_img)
-            img = Image.fromarray(np_img)
-        image = pil_to_tensor(img)
+        image = None
+        if self.return_images:
+            img = self.renderer.render(board, out_size=self.resolution)
+            if self.augment is not None:
+                np_img = np.asarray(img, dtype=np.uint8)
+                np_img = self.augment(np_img)
+                img = Image.fromarray(np_img)
+            image = pil_to_tensor(img)  # [3,H,W]
 
         # next move = next ply in game (or -1)
         if target_ply + 1 < n:
@@ -309,13 +320,16 @@ class ChessGameSampleDataset(Dataset):
             next_move_from = torch.tensor(-1, dtype=torch.long)
             next_move_to = torch.tensor(-1, dtype=torch.long)
             next_move_promo = torch.tensor(-1, dtype=torch.long)
+        
+        board_check = chess.Board(board.fen())
+        legal_pairs = {(m.from_square, m.to_square) for m in board_check.legal_moves}
+        if (int(move_from.item()), int(move_to.item())) not in legal_pairs:
+            return {"valid": False}
 
         out = {
             "valid": True,
             "game_idx": torch.tensor(g["idx"], dtype=torch.long),
             "ply_idx": torch.tensor(target_ply, dtype=torch.long),
-
-            "images": image,       # [3,H,W]
             "labels64": labels64,  # [64]
 
             "turn": turn,
@@ -333,5 +347,10 @@ class ChessGameSampleDataset(Dataset):
 
         if self.return_fen:
             out["fen"] = board.fen()
+
+        if self.return_images:
+            out["images"] = image
+        if self.return_piece_probs:
+            out["piece_probs"] = piece_probs
 
         return out

@@ -157,30 +157,37 @@ class TransformerEncoderBlock(nn.Module):
         x = self.layer_norm2(x + ffn_x)
         return x
 
+
 class ChessFormer(nn.Module):
-    def __init__(self, data_dim, model_dim=256, mlp_ratio = 2, n_heads=4, n_layers=6, dropout_rate=0.1):
+    """
+    Chessformer-style encoder body:
+      input: x_tokens [B,64,F] (continuous features, NOT token ids)
+      output: h [B,64,D]
+    """
+    def __init__(self, token_dim, model_dim=256, mlp_ratio=2, n_heads=4, n_layers=6, dropout_rate=0.1):
         super().__init__()
 
-        self.embedding = nn.Embedding(data_dim, model_dim) if data_dim != model_dim else nn.Identity()
+        self.token_proj = nn.Linear(token_dim, model_dim)
+
         self.encoder_layers = nn.ModuleList([
             TransformerEncoderBlock(
-            model_dim=model_dim,
-            hidden_dim=model_dim,   # keep same unless you explicitly want different
-            mlp_ratio=mlp_ratio,
-            n_heads=n_heads,
-            dropout_rate=dropout_rate,
-            #batch_first=True,
-            #norm_first=True,   # strongly recommended for training from scratch stability
-        )
+                model_dim=model_dim,
+                hidden_dim=model_dim,
+                mlp_ratio=mlp_ratio,
+                n_heads=n_heads,
+                dropout_rate=dropout_rate,
+            )
             for _ in range(n_layers)
         ])
 
         self.positional_encoder = LearnedAffinePositionalEncoder(seq_len=64, model_dim=model_dim)
 
-    def forward(self, x):
-        x = self.embedding(x)              # [b,64] -> [b,64,model_dim] (if embedding)
-        x = self.positional_encoder(x)     # learned add+mul per position
+    def forward(self, x_tokens):
+        # x_tokens: [B,64,F]
+        x = self.token_proj(x_tokens)          # [B,64,D]
+        x = self.positional_encoder(x)         # learned add+mul per square
 
         for layer in self.encoder_layers:
             x = layer(x)
+
         return x

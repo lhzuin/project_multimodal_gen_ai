@@ -11,7 +11,6 @@ def collate_positions_from_games(batch):
         return {"images": torch.empty(0)}
 
     out = {
-        "images": torch.stack([b["images"] for b in batch], dim=0),        # [B,3,H,W]
         "labels64": torch.stack([b["labels64"] for b in batch], dim=0),    # [B,64]
 
         "turn": torch.stack([b["turn"] for b in batch], dim=0),            # [B]
@@ -33,6 +32,14 @@ def collate_positions_from_games(batch):
     if "fen" in batch[0]:
         out["fen"] = [b["fen"] for b in batch]
 
+
+    if "piece_probs" in batch[0]:
+        out["piece_probs"] = torch.stack([b["piece_probs"] for b in batch], dim=0)  # [B,64,13]
+
+    if "images" in batch[0]:
+        out["images"] = torch.stack([b["images"] for b in batch], dim=0)  # [B,3,H,W]
+    else:
+        out["images"] = torch.empty(0)
     return out
 
 @dataclass

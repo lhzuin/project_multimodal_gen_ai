@@ -82,6 +82,10 @@ def main():
     sanity_check_batch(batch, resolution=resolution)
 
     for i in range(min(8, batch["images"].shape[0])):
+        print(f"move_from: {batch["move_from"][i]}")
+        print(f"move_to: {batch["move_to"][i]}")
+        print(f"next_move_from: {batch["next_move_from"][i]}")
+        print(f"next_move_to: {batch["next_move_to"][i]}")
         img = batch["images"][i].permute(1, 2, 0).cpu().numpy()
         plt.figure()
         plt.imshow(img)
