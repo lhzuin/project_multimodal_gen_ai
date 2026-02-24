@@ -1,9 +1,9 @@
-from twic_download import download_twic_zips, build_merged_pgn_from_zips, twic_range
-from offsets import ensure_offsets
+from dataset.twic_download import download_twic_zips, build_merged_pgn_from_zips, twic_range
+from dataset.offsets import ensure_offsets
 from torch.utils.data import DataLoader
 
-from dataset import ChessGameSampleDataset
-from collate import collate_positions_from_games
+from dataset.dataset import ChessGameSampleDataset
+from dataset.collate import collate_positions_from_games
 
 from pathlib import Path
 
@@ -18,16 +18,16 @@ print(f"Using sprites from {SPRITES_DIR}")
 
 def main():
     # 0) Download + merge TWIC PGNs (do this once, or keep updating weekly)
-    zips = download_twic_zips(twic_range(1601, 1610), out_dir="twic_zips")
-    build_merged_pgn_from_zips(zips, out_pgn_path="games.pgn")
+    zips = download_twic_zips(twic_range(1591, 1615), out_dir="twic_zips")
+    build_merged_pgn_from_zips(zips, out_pgn_path="games_large.pgn")
 
     # 1) Ensure offsets exist and match current games.pgn
-    ensure_offsets("games.pgn", "games_index.json")
+    ensure_offsets("games_large.pgn", "games_large_index.json")
 
     # 2) Dataset
     ds = ChessGameSampleDataset(
-        pgn_path="games.pgn",
-        index_path="games_index.json",
+        pgn_path="games_large.pgn",
+        index_path="games_large_index.json",
         sprites_dir=str(SPRITES_DIR),
         resolution=256,
         sample_ratio=0.10,

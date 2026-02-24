@@ -3,4 +3,5 @@ venv/
 *.pyc
 *.zip
 *.pt
+outputs/
 __pycache__/    
