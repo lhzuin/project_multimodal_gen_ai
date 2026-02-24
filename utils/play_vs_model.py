@@ -1,0 +1,226 @@
+import argparse
+import sys
+import torch
+import chess
+
+from models.chess_decoder_player import ChessDecoderPlayer
+from models.chess_encoder_player import ChessEncoderPlayer
+
+
+# ----------------------------
+# Robust checkpoint loading
+# ----------------------------
+def load_state_dict_any(ckpt_path: str):
+    obj = torch.load(ckpt_path, map_location="cpu")
+    if isinstance(obj, dict):
+        for k in ["state_dict", "model", "model_state_dict", "net", "weights"]:
+            if k in obj and isinstance(obj[k], dict):
+                return obj[k]
+    if isinstance(obj, dict):
+        return obj  # already a state_dict
+    raise ValueError(f"Unrecognized checkpoint format: {type(obj)}")
+
+
+def strip_prefix_if_present(state_dict, prefix: str):
+    if not any(k.startswith(prefix) for k in state_dict.keys()):
+        return state_dict
+    return {k[len(prefix):]: v for k, v in state_dict.items()}
+
+
+# ----------------------------
+# Encoder helpers (perfect perception)
+# ----------------------------
+# 13 channels is consistent with your vit output [B,64,13]. :contentReference[oaicite:2]{index=2}
+# We'll use: 0 empty, then 1..12 = P,N,B,R,Q,K,p,n,b,r,q,k
+PIECE2IDX = {
+    None: 0,
+    chess.Piece(chess.PAWN, chess.WHITE): 1,
+    chess.Piece(chess.KNIGHT, chess.WHITE): 2,
+    chess.Piece(chess.BISHOP, chess.WHITE): 3,
+    chess.Piece(chess.ROOK, chess.WHITE): 4,
+    chess.Piece(chess.QUEEN, chess.WHITE): 5,
+    chess.Piece(chess.KING, chess.WHITE): 6,
+    chess.Piece(chess.PAWN, chess.BLACK): 7,
+    chess.Piece(chess.KNIGHT, chess.BLACK): 8,
+    chess.Piece(chess.BISHOP, chess.BLACK): 9,
+    chess.Piece(chess.ROOK, chess.BLACK): 10,
+    chess.Piece(chess.QUEEN, chess.BLACK): 11,
+    chess.Piece(chess.KING, chess.BLACK): 12,
+}
+
+
+def board_to_piece_probs(board: chess.Board, device):
+    # [1,64,13] one-hot "probabilities"
+    x = torch.zeros((1, 64, 13), dtype=torch.float32, device=device)
+    for sq in chess.SQUARES:
+        p = board.piece_at(sq)
+        idx = PIECE2IDX.get(p, 0)
+        x[0, sq, idx] = 1.0
+    return x
+
+
+def board_metadata(board: chess.Board, device):
+    # turn: [1] 0=white,1=black (your code expects float later) :contentReference[oaicite:3]{index=3}
+    turn = torch.tensor([0 if board.turn == chess.WHITE else 1], device=device)
+
+    # castling: [1,4] (WK,WQ,BK,BQ) :contentReference[oaicite:4]{index=4}
+    castling = torch.tensor([[
+        int(board.has_kingside_castling_rights(chess.WHITE)),
+        int(board.has_queenside_castling_rights(chess.WHITE)),
+        int(board.has_kingside_castling_rights(chess.BLACK)),
+        int(board.has_queenside_castling_rights(chess.BLACK)),
+    ]], device=device)
+
+    # ep_square: [1] with -1 if none :contentReference[oaicite:5]{index=5}
+    ep = -1 if board.ep_square is None else int(board.ep_square)
+    ep_square = torch.tensor([ep], device=device)
+
+    return turn, castling, ep_square
+
+
+# ----------------------------
+# Decoder helpers
+# ----------------------------
+def history_to_input_ids(tok, moves_uci, device, max_len=256):
+    # We build: [BOS] + move tokens
+    ids = [tok.bos_id]
+    for u in moves_uci:
+        tid = tok.move2id.get(u, None)
+        if tid is None:
+            # If your tokenizer doesn't contain this move, you can skip or map to unk.
+            tid = tok.unk_id
+        ids.append(tid)
+
+    # Crop to last max_len tokens
+    ids = ids[-max_len:]
+    input_ids = torch.tensor([ids], device=device, dtype=torch.long)
+    attn = torch.ones_like(input_ids, dtype=torch.long)
+    return input_ids, attn
+
+
+# ----------------------------
+# CLI loop
+# ----------------------------
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--model_type", choices=["decoder", "encoder"], required=True)
+    ap.add_argument("--ckpt", required=True, help="Path to .pt/.pth checkpoint")
+    ap.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
+
+    # decoder-specific
+    ap.add_argument("--tokenizer_path", default=None, help="Needed for decoder (ChessLLM tokenizer)")
+    ap.add_argument("--max_seq_len", type=int, default=256)
+
+    # encoder-specific
+    ap.add_argument("--img_size", type=int, default=256, help="Only used to construct ChessEncoderPlayer")
+    ap.add_argument("--vit_path", default=None, help="Optional; not needed if using perfect piece_probs")
+
+    # play options
+    ap.add_argument("--you", choices=["white", "black"], default="white")
+    ap.add_argument("--temperature", type=float, default=0.8)
+    ap.add_argument("--topk", type=int, default=20)
+    ap.add_argument("--greedy", action="store_true")
+
+    args = ap.parse_args()
+    device = torch.device(args.device)
+
+    # --- build + load model
+    sd = load_state_dict_any(args.ckpt)
+
+    if args.model_type == "decoder":
+        if not args.tokenizer_path:
+            raise SystemExit("--tokenizer_path is required for decoder model.")
+        model = ChessDecoderPlayer(
+            tokenizer_path=args.tokenizer_path,
+            max_seq_len=args.max_seq_len,
+        )
+        # common patterns: "module." or "model."
+        sd2 = strip_prefix_if_present(sd, "module.")
+        sd2 = strip_prefix_if_present(sd2, "model.")
+        model.load_state_dict(sd2, strict=False)
+        model.eval().to(device)
+        tok = model.decoder.tokenizer
+
+    else:
+        model = ChessEncoderPlayer(
+            img_size=args.img_size,
+            vit_path=args.vit_path,
+            freeze_vit=True,
+        )
+        sd2 = strip_prefix_if_present(sd, "module.")
+        sd2 = strip_prefix_if_present(sd2, "model.")
+        model.load_state_dict(sd2, strict=False)
+        model.eval().to(device)
+
+    # --- game loop
+    board = chess.Board()
+    human_is_white = (args.you == "white")
+
+    # decoder history in UCI
+    moves_uci = []
+
+    def model_move():
+        fen = board.fen()
+
+        if args.model_type == "decoder":
+            input_ids, attn = history_to_input_ids(tok, moves_uci, device, max_len=args.max_seq_len)
+            mv = model.sample_moves(
+                input_ids=input_ids,
+                attention_mask=attn,
+                fen_list=[fen],
+                start_turn=None,
+                temperature=args.temperature,
+                topk=(args.topk if args.topk > 0 else None),
+                greedy=args.greedy,
+            )[0]
+            return mv
+
+        else:
+            piece_probs = board_to_piece_probs(board, device)
+            turn, castling, ep_square = board_metadata(board, device)
+            mv = model.sample_moves(
+                piece_probs=piece_probs,
+                turn=turn,
+                castling=castling,
+                ep_square=ep_square,
+                fen=[fen],
+                temperature=args.temperature,
+                topk=(args.topk if args.topk > 0 else None),
+                greedy=args.greedy,
+            )[0]
+            return mv
+
+    while not board.is_game_over():
+        print(board)
+        print("FEN:", board.fen())
+        side_to_move_is_white = (board.turn == chess.WHITE)
+        human_turn = (side_to_move_is_white and human_is_white) or ((not side_to_move_is_white) and (not human_is_white))
+
+        if human_turn:
+            s = input("Your move (UCI like e2e4, or 'quit'): ").strip()
+            if s.lower() in {"q", "quit", "exit"}:
+                break
+            try:
+                mv = chess.Move.from_uci(s)
+            except Exception:
+                print("Invalid UCI format.")
+                continue
+            if mv not in board.legal_moves:
+                print("Illegal move.")
+                continue
+            board.push(mv)
+            moves_uci.append(mv.uci())
+        else:
+            mv = model_move()
+            if mv not in board.legal_moves:
+                # should not happen due to legal masking, but keep a safe fallback
+                mv = next(iter(board.legal_moves))
+            print("Model plays:", mv.uci())
+            board.push(mv)
+            moves_uci.append(mv.uci())
+
+    print("Game over:", board.result(), board.outcome())
+
+
+if __name__ == "__main__":
+    main()
