@@ -392,7 +392,7 @@ class Trainer:
             self.run_stage(stage_dict)
 
 
-@hydra.main(config_path="../configs", config_name="chess_decoder_player_v7", version_base="1.1")
+@hydra.main(config_path="../configs", config_name="chess_decoder_player_v8", version_base="1.1")
 def main(cfg):
     set_seed(int(cfg.seed))
 

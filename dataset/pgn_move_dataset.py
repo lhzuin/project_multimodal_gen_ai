@@ -49,7 +49,12 @@ class PGNMoveDataset(Dataset):
         if game is None:
             return {"valid": False}
 
-        move_ids, piece_ids = self.tok.encode_pgn_game(game, strict=self.strict)
+        try:
+            move_ids, piece_ids = self.tok.encode_pgn_game(game, strict=self.strict)
+        except KeyError:
+            print(f"Encoding error in game idx={idx}, skipping")
+            return {"valid": False}
+        
 
         # optional: sample a fixed-length window (block_size)
         if self.block_size is not None:
