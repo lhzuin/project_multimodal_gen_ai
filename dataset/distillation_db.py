@@ -29,16 +29,21 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
+from concurrent.futures import ProcessPoolExecutor, as_completed
+import time
+
 import chess
 import chess.pgn
 import torch
+import numpy as np
 from torch.utils.data import Dataset
 
 from utils.stockfish_teacher import StockfishUCI, _score_to_scalar, _uci_to_from_to_promo
 
 # Import helpers: this repo sometimes exposes these modules either as top-level
 # files (e.g. offsets.py) or inside a package (e.g. dataset/offsets.py).
-from dataset.offsets import load_pgn_offsets  # type: ignore
+from dataset.offsets import load_pgn_offsets
+from dataset.renderer import board_to_grid_ids
 
 
 
@@ -355,12 +360,17 @@ class DistillationDBBuilder:
                 if os.path.exists(sp):
                     os.remove(sp)
 
-        from concurrent.futures import ProcessPoolExecutor
 
-        results: List[Dict[str, Any]] = []
+        total_samples = len(samples)
+        done_samples = 0
+        t0 = time.time()
+
+        results = []
         with ProcessPoolExecutor(max_workers=self.num_workers) as ex:
             futs = []
+            shard_sizes = []
             for i, (sp, shard_samples) in enumerate(zip(shard_paths, shards)):
+                shard_sizes.append(len(shard_samples))
                 futs.append(
                     ex.submit(
                         _worker_build_shard,
@@ -375,8 +385,45 @@ class DistillationDBBuilder:
                         seed=self.seed + 1000 * i,
                     )
                 )
-            for fu in futs:
-                results.append(fu.result())
+
+            # Map future -> shard size so we can update done count on completion
+            fut2n = {fu: n for fu, n in zip(futs, shard_sizes)}
+
+            for fu in as_completed(futs):
+                res = fu.result()
+                results.append(res)
+                done_samples += fut2n[fu]
+
+                elapsed = time.time() - t0
+                rate = done_samples / max(elapsed, 1e-6)
+                remaining = (total_samples - done_samples) / max(rate, 1e-6)
+
+                print(
+                    f"[distill_db] {done_samples}/{total_samples} "
+                    f"({done_samples/total_samples:.1%}) | "
+                    f"{rate:.1f} pos/s | ETA {remaining/60:.1f} min"
+                )
+
+        # results: List[Dict[str, Any]] = []
+        # with ProcessPoolExecutor(max_workers=self.num_workers) as ex:
+        #     futs = []
+        #     for i, (sp, shard_samples) in enumerate(zip(shard_paths, shards)):
+        #         futs.append(
+        #             ex.submit(
+        #                 _worker_build_shard,
+        #                 shard_path=sp,
+        #                 pgn_path=self.pgn_path,
+        #                 index_path=self.index_path,
+        #                 samples=shard_samples,
+        #                 engine_path=self.engine_path,
+        #                 movetime_ms=self.movetime_ms,
+        #                 k=self.k,
+        #                 min_depth=self.min_depth,
+        #                 seed=self.seed + 1000 * i,
+        #             )
+        #         )
+        #     for fu in futs:
+        #         results.append(fu.result())
 
         shard_counts: List[int] = []
         for sp in shard_paths:
@@ -512,12 +559,14 @@ class DistillationEncoderDataset(Dataset):
         tau: float = 50.0,
         mate_cp: int = 20000,
         return_text: bool = False,
+        return_state_tensors: bool = True,
     ) -> None:
         self.index = _MultiShardIndex(meta_path)
         self.readers = [DistillationShardReader(p) for (p, _) in self.index.shards]
         self.tau = float(tau)
         self.mate_cp = int(mate_cp)
         self.return_text = bool(return_text)
+        self.return_state_tensors = bool(return_state_tensors)
 
     def __getstate__(self):
         st = self.__dict__.copy()
@@ -572,6 +621,36 @@ class DistillationEncoderDataset(Dataset):
             "teacher_to": to_ids,
             "teacher_probs": probs.to(dtype=torch.float32),
         }
+
+        if self.return_state_tensors:
+            fen = row["fen"]
+            board = chess.Board(fen)
+
+            # grid: (8,8) with your existing convention
+            grid = board_to_grid_ids(board)
+            labels64 = torch.from_numpy(grid.reshape(-1)).long()  # [64]
+
+            # one-hot: [64,13]
+            piece_probs = torch.nn.functional.one_hot(labels64, num_classes=13).float()
+
+            # IMPORTANT: match ChessGameSampleDataset convention: 1=white, 0=black
+            turn = torch.tensor(1 if board.turn else 0, dtype=torch.long)
+
+            ck  = int(board.has_kingside_castling_rights(chess.WHITE))
+            cq  = int(board.has_queenside_castling_rights(chess.WHITE))
+            ck2 = int(board.has_kingside_castling_rights(chess.BLACK))
+            cq2 = int(board.has_queenside_castling_rights(chess.BLACK))
+            castling = torch.tensor([ck, cq, ck2, cq2], dtype=torch.long)
+
+            ep_square = torch.tensor(board.ep_square if board.ep_square is not None else -1, dtype=torch.long)
+
+            out.update({
+                "labels64": labels64,
+                "piece_probs": piece_probs,
+                "turn": turn,
+                "castling": castling,
+                "ep_square": ep_square,
+            })
         if p_promo is not None:
             out["teacher_promo_probs"] = p_promo
         if self.return_text:
@@ -652,6 +731,26 @@ def collate_distill_encoder(batch: List[Dict[str, Any]]) -> Dict[str, Any]:
         "teacher_probs": p,
         "teacher_mask": m,
     }
+
+    has_state = (
+        "piece_probs" in batch[0]
+        and "turn" in batch[0]
+        and "castling" in batch[0]
+        and "ep_square" in batch[0]
+    )
+
+    if has_state:
+        piece_probs = torch.stack([b["piece_probs"] for b in batch], dim=0)  # [B,64,13]
+        labels64    = torch.stack([b["labels64"] for b in batch], dim=0)     # [B,64]
+        turn        = torch.stack([b["turn"] for b in batch], dim=0)         # [B]
+        castling    = torch.stack([b["castling"] for b in batch], dim=0)     # [B,4]
+        ep_square   = torch.stack([b["ep_square"] for b in batch], dim=0)    # [B]
+
+        out["piece_probs"] = piece_probs
+        out["labels64"] = labels64
+        out["turn"] = turn
+        out["castling"] = castling
+        out["ep_square"] = ep_square
     if promo is not None:
         out["teacher_promo_probs"] = promo
     return out

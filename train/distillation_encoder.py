@@ -1,4 +1,5 @@
-# train.py
+
+# train/distillation_encoder.py
 import os, sys, signal, random
 import numpy as np
 import torch
@@ -11,6 +12,9 @@ from torch.utils.data import DataLoader, Subset
 from torch.amp import autocast, GradScaler
 from transformers.optimization import get_scheduler
 from tqdm.auto import tqdm
+
+# NEW: distillation DB dataset + collate
+from dataset.distillation_db import DistillationEncoderDataset, collate_distill_encoder
 
 os.environ["HYDRA_FULL_ERROR"] = "1"
 
@@ -76,23 +80,43 @@ def split_indices(n: int, val_fraction: float, seed: int):
 
 
 def batch_is_empty(batch: dict) -> bool:
+    # Distillation collate returns {"valid": False} when batch had no valid samples.
     if not isinstance(batch, dict):
         return True
-    if "piece_probs" in batch and batch["piece_probs"].numel() > 0:
-        return False
-    if "images" in batch and batch["images"].numel() > 0:
-        return False
-    return True
+    if batch.get("valid", True) is False:
+        return True
+    return False
 
 
+def teacher_sparse_ce(policy_logits_flat: torch.Tensor,
+                      teacher_idx: torch.Tensor,
+                      teacher_probs: torch.Tensor,
+                      teacher_mask: torch.Tensor) -> torch.Tensor:
+    """
+    policy_logits_flat: [B, 4096]
+    teacher_idx:        [B, K] with -1 for padding
+    teacher_probs:      [B, K] (already sums to 1 per row over valid entries)
+    teacher_mask:       [B, K] bool
+    Returns: mean loss over batch (float tensor)
+    """
+    # gather logits on teacher support
+    safe_idx = teacher_idx.clamp_min(0)  # avoid negative indices in gather
+    gathered = policy_logits_flat.gather(1, safe_idx)  # [B,K]
+    # mask out padded entries
+    gathered = gathered.masked_fill(~teacher_mask, float("-inf"))
+    logp = torch.log_softmax(gathered, dim=-1)  # normalized on teacher support
+    loss = -(teacher_probs * logp).sum(dim=-1)  # [B]
+    return loss.mean()
 
-def move_metrics(from_logits, to_logits, move_from, move_to):
-    # accuracy on from/to separately
-    from_pred = from_logits.argmax(dim=-1)
-    to_pred = to_logits.argmax(dim=-1)
-    acc_from = (from_pred == move_from).float().mean().item()
-    acc_to = (to_pred == move_to).float().mean().item()
-    return acc_from, acc_to
+
+def promo_distill_ce(promo_logits: torch.Tensor,
+                     teacher_promo_probs_5: torch.Tensor) -> torch.Tensor:
+    """
+    promo_logits: [B, 5]
+    teacher_promo_probs_5: [B, 5] distribution over (none, n, b, r, q)
+    """
+    logp = torch.log_softmax(promo_logits, dim=-1)
+    return -(teacher_promo_probs_5 * logp).sum(dim=-1).mean()
 
 
 class Trainer:
@@ -102,7 +126,6 @@ class Trainer:
         self.device = device
 
         self.model = None
-        self.loss_fn = None
         self.scaler = GradScaler(device="cuda") if device.type == "cuda" else None
 
         self.train_dataset = None
@@ -117,7 +140,7 @@ class Trainer:
         self.checkpoint_save_path = cfg.checkpoint_save_path
         self.acc_epsilon = cfg.acc_epsilon
 
-        # Build opt cfg like before (keep only AdamW-safe args)
+        # Build opt cfg like train_chessformer.py (keep only AdamW-safe args)
         opt_cfg_full = OmegaConf.to_container(cfg.optim, resolve=True, enum_to_str=True)
         target = opt_cfg_full.pop("_target_")
         allowed_keys = {
@@ -133,27 +156,29 @@ class Trainer:
         self.grad_clip_norm = float(getattr(cfg, "trainer", {}).get("grad_clip_norm", 1.0))
 
     def init_data(self):
-        # Dataset + collate from Hydra
-        self.train_dataset = hydra.utils.instantiate(self.cfg.dataset_train)
-        self.val_dataset   = hydra.utils.instantiate(self.cfg.dataset_val)
-        collate_fn = hydra.utils.instantiate(self.cfg.collate)
+        # NEW: build dataset from distill DB meta.json
+        ds = DistillationEncoderDataset(
+            meta_path=self.cfg.distill.meta_path,
+            tau=float(self.cfg.distill.tau),
+            mate_cp=int(self.cfg.distill.mate_cp),
+            return_text=bool(getattr(self.cfg.distill, "return_text", False)),
+            return_state_tensors=True,
+        )
 
-
-        # Split into train/val
         val_fraction = float(getattr(self.cfg.data, "val_fraction", 0.05))
-        train_idx, val_idx = split_indices(len(self.train_dataset), val_fraction, seed=int(self.cfg.seed))
+        train_idx, val_idx = split_indices(len(ds), val_fraction, seed=int(self.cfg.seed))
 
-        train_ds = Subset(self.train_dataset, train_idx)
-        val_ds   = Subset(self.val_dataset, val_idx)
-
+        train_ds = Subset(ds, train_idx)
+        val_ds = Subset(ds, val_idx)
 
         dl_cfg = self.cfg.dataloader
+
         self.train_loader = DataLoader(
             train_ds,
             batch_size=dl_cfg.batch_size,
             shuffle=dl_cfg.shuffle,
             num_workers=dl_cfg.num_workers,
-            collate_fn=collate_fn,
+            collate_fn=collate_distill_encoder,
             pin_memory=dl_cfg.pin_memory,
             persistent_workers=dl_cfg.persistent_workers and dl_cfg.num_workers > 0,
             drop_last=getattr(dl_cfg, "drop_last", False),
@@ -163,87 +188,94 @@ class Trainer:
             batch_size=dl_cfg.batch_size,
             shuffle=False,
             num_workers=dl_cfg.num_workers,
-            collate_fn=collate_fn,
+            collate_fn=collate_distill_encoder,
             pin_memory=dl_cfg.pin_memory,
             persistent_workers=dl_cfg.persistent_workers and dl_cfg.num_workers > 0,
             drop_last=False,
         )
 
-        print(f"Dataset size={len(self.train_dataset)} | train={len(train_ds)} | val={len(val_ds)}")
+        print(f"Distill DB size={len(ds)} | train={len(train_ds)} | val={len(val_ds)}")
 
     def init_model(self):
         self.model = hydra.utils.instantiate(self.cfg.model.instance).to(self.device)
-        self.loss_fn = hydra.utils.instantiate(self.cfg.loss_fn)
 
-    
     def _forward_loss_and_metrics(self, batch):
-        move_from = batch["move_from"].to(self.device, non_blocking=True)
-        move_to = batch["move_to"].to(self.device, non_blocking=True)
-        move_promo = batch["move_promo"].to(self.device, non_blocking=True)
+        # Teacher (sparse)
+        teacher_from = batch["teacher_from"].to(self.device, non_blocking=True)   # [B,K]
+        teacher_to = batch["teacher_to"].to(self.device, non_blocking=True)       # [B,K]
+        teacher_probs = batch["teacher_probs"].to(self.device, non_blocking=True) # [B,K]
+        teacher_mask = batch["teacher_mask"].to(self.device, non_blocking=True)   # [B,K] bool
+        fen_list = batch["fen"]  # list[str]
 
-        train_input = getattr(self.cfg, "train_input", "image")
+        # Here, we reconstruct these from FEN on the fly (cheap, avoids storing extra fields in DB).
 
-        turn = batch["turn"].to(self.device, non_blocking=True)
-        castling = batch["castling"].to(self.device, non_blocking=True)
-        ep_square = batch["ep_square"].to(self.device, non_blocking=True)
+        # Model expects turn/castling/ep_square; derive from FEN.
+        piece_probs = batch["piece_probs"].to(self.device, non_blocking=True)  # [B,64,13]
+        turn       = batch["turn"].to(self.device, non_blocking=True)          # [B]
+        castling   = batch["castling"].to(self.device, non_blocking=True)      # [B,4]
+        ep_square  = batch["ep_square"].to(self.device, non_blocking=True)     # [B]
 
-        if train_input == "pieces":
-            piece_probs = batch["piece_probs"].to(self.device, non_blocking=True)  # [B,64,13]
-            out = self.model(
-                piece_probs=piece_probs,
-                turn=turn,
-                castling=castling,
-                ep_square=ep_square,
-            )
-        else:
-            images = batch["images"].to(self.device, non_blocking=True)
-            out = self.model(
-                images=images,
-                turn=turn,
-                castling=castling,
-                ep_square=ep_square,
-            )
-
+        # Forward (use pieces pathway by default for distillation)
+        out = self.model(
+            piece_probs=piece_probs,
+            turn=turn,
+            castling=castling,
+            ep_square=ep_square,
+        )
 
         policy_logits = out["policy_logits"]  # [B,64,64]
         promo_logits = out["promo_logits"]    # [B,5]
-        B = policy_logits.size(0)
+        B2 = policy_logits.size(0)
 
-        # --- legal masking during training ---
+        # --- legal mask ---
         if getattr(self.cfg, "use_legal_mask", True):
-            fen_list = batch["fen"]  # list[str]
             legal_mask = self.model.legal_mask_from_fen(fen_list, device=policy_logits.device)
             policy_logits = self.model.apply_legal_mask(policy_logits, legal_mask)
 
-        flat_logits = policy_logits.view(B, 4096)
-        target = move_from * 64 + move_to  # [B]
+        flat_logits = policy_logits.view(B2, 4096)
 
-        loss_policy = F.cross_entropy(flat_logits, target)
-        loss_promo = F.cross_entropy(promo_logits, move_promo)
-        loss = loss_policy + loss_promo
+        # Convert teacher (from,to) -> flat index
+        teacher_idx = teacher_from * 64 + teacher_to  # [B,K], -64.. etc if padded; mask will remove
+        teacher_idx = teacher_idx.to(dtype=torch.long)
+
+        loss_policy = teacher_sparse_ce(flat_logits, teacher_idx, teacher_probs, teacher_mask)
+
+        # Promo distillation (optional)
+        loss_promo = torch.tensor(0.0, device=self.device)
+        if "teacher_promo_probs" in batch and getattr(self.cfg.distill, "use_promo_loss", True):
+            tp = batch["teacher_promo_probs"].to(self.device, non_blocking=True)  # [B,4] over n,b,r,q
+            # Build 5-class dist for (none,n,b,r,q). Assumes your model uses 0=none,1=n,2=b,3=r,4=q.
+            teacher_promo_5 = torch.zeros((B2, 5), dtype=torch.float32, device=self.device)
+            teacher_promo_5[:, 1:] = tp
+            teacher_promo_5[:, 0] = (1.0 - tp.sum(dim=-1)).clamp(min=0.0)
+            loss_promo = promo_distill_ce(promo_logits, teacher_promo_5)
+
+        loss = loss_policy + float(getattr(self.cfg.distill, "promo_loss_weight", 1.0)) * loss_promo
         if not torch.isfinite(loss):
-            # Skip this batch: don't backward, don't step
             return None
 
-        pred = flat_logits.argmax(dim=-1)
-        correct1 = (pred == target).sum().item()   # count, not mean
+        # Metrics: match teacher top-1 (argmax over teacher support)
+        # teacher best index per sample:
+        best_k = teacher_probs.argmax(dim=-1)  # [B]
+        teacher_best_idx = teacher_idx.gather(1, best_k.unsqueeze(1)).squeeze(1)  # [B]
+        pred = flat_logits.argmax(dim=-1)  # [B]
+        correct1 = (pred == teacher_best_idx).sum().item()
 
-        # top-k
-        k_list = [5]
-        topk_idx = torch.topk(flat_logits, k=max(k_list), dim=-1).indices  # [B, maxk]
-        # membership test for each k
-        correct5 = (topk_idx[:, :5] == target.unsqueeze(1)).any(dim=1).sum().item()
+        # top-5 vs teacher best
+        topk_idx = torch.topk(flat_logits, k=5, dim=-1).indices
+        correct5 = (topk_idx == teacher_best_idx.unsqueeze(1)).any(dim=1).sum().item()
 
-        return loss, correct1, correct5, B
+        return loss, correct1, correct5, B2, float(loss_policy.detach().cpu().item()), float(loss_promo.detach().cpu().item())
 
     def run_epoch(self, stage_name, scheduler):
         self.model.train()
         total_loss, total_correct, total_correct5, total_n = 0.0, 0, 0, 0
+        total_policy_loss, total_promo_loss = 0.0, 0.0
 
         accum = 0
         self.optimizer.zero_grad(set_to_none=True)
 
-        progress = tqdm(self.train_loader, desc=f"{stage_name} | training", leave=False)
+        progress = tqdm(self.train_loader, desc=f"{stage_name} | distill-train", leave=False)
         for batch in progress:
             if batch_is_empty(batch):
                 continue
@@ -253,22 +285,22 @@ class Trainer:
                     res = self._forward_loss_and_metrics(batch)
                     if res is None:
                         continue
-                    loss, correct, correct5, n = res
+                    loss, correct, correct5, n, lp, lpr = res
                     loss_scaled = loss / self.grad_accum_steps
-
                 self.scaler.scale(loss_scaled).backward()
             else:
                 res = self._forward_loss_and_metrics(batch)
                 if res is None:
                     continue
-                loss, correct, correct5, n = res
+                loss, correct, correct5, n, lp, lpr = res
                 (loss / self.grad_accum_steps).backward()
 
             accum += 1
 
-            # --- logging stays per *micro-batch* exactly like before ---
             loss_val = float(loss.detach().cpu().item())
             total_loss += loss_val * n
+            total_policy_loss += float(lp) * n
+            total_promo_loss += float(lpr) * n
             total_correct += correct
             total_correct5 += correct5
             total_n += n
@@ -280,18 +312,17 @@ class Trainer:
             if self.logger:
                 wandb.log({
                     f"{stage_name}/loss_step": loss_val,
+                    f"{stage_name}/policy_loss_step": float(lp),
+                    f"{stage_name}/promo_loss_step": float(lpr),
                     f"{stage_name}/acc_step": acc_val,
                     f"{stage_name}/acc5_step": acc5_val,
                     "aggregate/loss_step": loss_val,
                 })
 
-            # --- optimizer/scheduler step only every grad_accum_steps ---
             if accum % self.grad_accum_steps == 0:
                 if self.scaler:
-                    # IMPORTANT: unscale before clipping when using GradScaler
                     self.scaler.unscale_(self.optimizer)
                     torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=self.grad_clip_norm)
-
                     self.scaler.step(self.optimizer)
                     self.scaler.update()
                 else:
@@ -299,36 +330,44 @@ class Trainer:
                     self.optimizer.step()
 
                 self.optimizer.zero_grad(set_to_none=True)
-
                 if scheduler:
                     scheduler.step()
 
-        # If last partial accumulation didn't trigger a step, you can either:
-        # (A) ignore it (common), or
-        # (B) step once more to not waste gradients.
-        # Minimal behavior: DO NOT step here (keeps semantics stable).
-
-        return (total_loss / max(1, total_n)), (total_correct / max(1, total_n)), (total_correct5 / max(1, total_n))
+        return (
+            total_loss / max(1, total_n),
+            total_correct / max(1, total_n),
+            total_correct5 / max(1, total_n),
+            total_policy_loss / max(1, total_n),
+            total_promo_loss / max(1, total_n),
+        )
 
     @torch.no_grad()
     def run_validation(self):
         self.model.eval()
         total_loss, total_correct, total_correct5, total_n = 0.0, 0, 0, 0
+        total_policy_loss, total_promo_loss = 0.0, 0.0
 
         for batch in self.val_loader:
             if batch_is_empty(batch):
                 continue
-
-            loss, correct, correct5, n = self._forward_loss_and_metrics(batch)
+            res = self._forward_loss_and_metrics(batch)
+            if res is None:
+                continue
+            loss, correct, correct5, n, lp, lpr = res
             total_loss += float(loss.detach().cpu().item()) * n
+            total_policy_loss += float(lp) * n
+            total_promo_loss += float(lpr) * n
             total_correct += correct
             total_correct5 += correct5
             total_n += n
 
-        val_loss = total_loss / max(1, total_n)
-        val_acc = total_correct / max(1, total_n)
-        val_acc5 = total_correct5 / max(1, total_n)
-        return val_loss, val_acc, val_acc5
+        return (
+            total_loss / max(1, total_n),
+            total_correct / max(1, total_n),
+            total_correct5 / max(1, total_n),
+            total_policy_loss / max(1, total_n),
+            total_promo_loss / max(1, total_n),
+        )
 
     def run_stage(self, stage_dict):
         stage_name = stage_dict["name"]
@@ -358,13 +397,15 @@ class Trainer:
         best_val_loss, best_val_acc, epochs_no_improve = float("inf"), 0.0, 0
 
         for epoch in range(stage_dict["epochs"]):
-            train_loss, train_acc, train_acc5 = self.run_epoch(stage_name, scheduler)
-            val_loss, val_acc, val_acc5 = self.run_validation()
+            train_loss, train_acc, train_acc5, train_pl, train_pr = self.run_epoch(stage_name, scheduler)
+            val_loss, val_acc, val_acc5, val_pl, val_pr = self.run_validation()
 
             print(
                 f"[{stage_name}][Epoch {epoch}] "
-                f"train_loss={train_loss:.4f} train_acc={train_acc:.4f} train_acc5={train_acc5:.4f} | "
-                f"val_loss={val_loss:.4f} val_acc={val_acc:.4f} val_acc5={val_acc5:.4f}"
+                f"train_loss={train_loss:.4f} train_acc={train_acc:.4f} train_acc5={train_acc5:.4f} "
+                f"(policy={train_pl:.4f}, promo={train_pr:.4f}) | "
+                f"val_loss={val_loss:.4f} val_acc={val_acc:.4f} val_acc5={val_acc5:.4f} "
+                f"(policy={val_pl:.4f}, promo={val_pr:.4f})"
             )
 
             if self.logger:
@@ -373,9 +414,13 @@ class Trainer:
                     f"{stage_name}/loss_epoch": train_loss,
                     f"{stage_name}/acc_epoch": train_acc,
                     f"{stage_name}/acc5_epoch": train_acc5,
+                    f"{stage_name}/policy_loss_epoch": train_pl,
+                    f"{stage_name}/promo_loss_epoch": train_pr,
                     f"{stage_name}/val_loss_epoch": val_loss,
                     f"{stage_name}/val_acc_epoch": val_acc,
                     f"{stage_name}/val_acc5_epoch": val_acc5,
+                    f"{stage_name}/val_policy_loss_epoch": val_pl,
+                    f"{stage_name}/val_promo_loss_epoch": val_pr,
                     "aggregate/val_loss_epoch": val_loss,
                     "aggregate/val_acc_epoch": val_acc,
                     "aggregate/val_acc5_epoch": val_acc5,
@@ -404,7 +449,7 @@ class Trainer:
             self.run_stage(stage_dict)
 
 
-@hydra.main(config_path="../configs", config_name="chess_encoder_player_v3", version_base="1.1")
+@hydra.main(config_path="../configs", config_name="distillation_encoder", version_base="1.1")
 def main(cfg):
     set_seed(int(cfg.seed))
 

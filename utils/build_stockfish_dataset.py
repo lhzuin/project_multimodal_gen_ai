@@ -24,11 +24,11 @@ dataset/twic_download.py, dataset/offsets.py, dataset/dataset.py).
 To avoid forcing you to rearrange files, we use small import fallbacks.
 """
 
-from utils.twic_download import download_twic_zips, build_merged_pgn_from_zips, twic_range  # type: ignore
+from utils.twic_download import download_twic_zips, build_merged_pgn_from_zips, twic_range 
 
-from dataset.offsets import ensure_offsets  # type: ignore
+from dataset.offsets import ensure_offsets 
 
-from dataset.dataset import build_samples_file  # type: ignore
+from dataset.dataset import build_samples_file 
 
 from dataset.distillation_db import DistillationDBBuilder
 
@@ -108,7 +108,7 @@ if __name__ == "__main__":
         engine_path=os.environ.get("STOCKFISH_PATH", "stockfish"),
         movetime_ms=100,
         k=5,
-        num_workers=4,
+        num_workers=10,
         out_db_dir="distill_db",
     )
     b = BuildStockfishDistillationDB(cfg)
