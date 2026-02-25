@@ -245,13 +245,19 @@ class Trainer:
             return None
 
         pred = flat_logits.argmax(dim=-1)
-        acc = (pred == target).float().mean().item()
-        n = B
-        return loss, acc, n
+        correct1 = (pred == target).sum().item()   # count, not mean
+
+        # top-k
+        k_list = [5]
+        topk_idx = torch.topk(flat_logits, k=max(k_list), dim=-1).indices  # [B, maxk]
+        # membership test for each k
+        correct5 = (topk_idx[:, :5] == target.unsqueeze(1)).any(dim=1).sum().item()
+
+        return loss, correct1, correct5, B
 
     def run_epoch(self, stage_name, scheduler):
         self.model.train()
-        total_loss, total_correct, total_n = 0.0, 0, 0
+        total_loss, total_correct, total_correct5, total_n = 0.0, 0, 0, 0
 
         accum = 0
         self.optimizer.zero_grad(set_to_none=True)
@@ -266,7 +272,7 @@ class Trainer:
                     res = self._forward_loss_and_metrics(batch)
                     if res is None:
                         continue
-                    loss, correct, n = res
+                    loss, correct, correct5, n = res
                     loss_scaled = loss / self.grad_accum_steps
 
                 self.scaler.scale(loss_scaled).backward()
@@ -274,7 +280,7 @@ class Trainer:
                 res = self._forward_loss_and_metrics(batch)
                 if res is None:
                     continue
-                loss, correct, n = res
+                loss, correct, correct5, n = res
                 (loss / self.grad_accum_steps).backward()
 
             accum += 1
@@ -283,15 +289,18 @@ class Trainer:
             loss_val = float(loss.detach().cpu().item())
             total_loss += loss_val * n
             total_correct += correct
+            total_correct5 += correct5
             total_n += n
 
             acc_val = correct / max(1, n)
-            progress.set_postfix(loss=f"{loss_val:.4f}", acc=f"{acc_val:.3f}")
+            acc5_val = correct5 / max(1, n)
+            progress.set_postfix(loss=f"{loss_val:.4f}", acc=f"{acc_val:.3f}", acc5=f"{acc5_val:.3f}")
 
             if self.logger:
                 wandb.log({
                     f"{stage_name}/loss_step": loss_val,
                     f"{stage_name}/acc_step": acc_val,
+                    f"{stage_name}/acc5_step": acc5_val,
                     "aggregate/loss_step": loss_val,
                 })
 
@@ -318,25 +327,27 @@ class Trainer:
         # (B) step once more to not waste gradients.
         # Minimal behavior: DO NOT step here (keeps semantics stable).
 
-        return (total_loss / max(1, total_n)), (total_correct / max(1, total_n))
+        return (total_loss / max(1, total_n)), (total_correct / max(1, total_n)), (total_correct5 / max(1, total_n))
 
     @torch.no_grad()
     def run_validation(self):
         self.model.eval()
-        total_loss, total_correct, total_n = 0.0, 0, 0
+        total_loss, total_correct, total_correct5, total_n = 0.0, 0, 0, 0
 
         for batch in self.val_loader:
             if batch_is_empty(batch):
                 continue
 
-            loss, correct, n = self._forward_loss_and_metrics(batch)
+            loss, correct, correct5, n = self._forward_loss_and_metrics(batch)
             total_loss += float(loss.detach().cpu().item()) * n
             total_correct += correct
+            total_correct5 += correct5
             total_n += n
 
         val_loss = total_loss / max(1, total_n)
         val_acc = total_correct / max(1, total_n)
-        return val_loss, val_acc
+        val_acc5 = total_correct5 / max(1, total_n)
+        return val_loss, val_acc, val_acc5
 
     def run_stage(self, stage_dict):
         stage_name = stage_dict["name"]
@@ -354,7 +365,8 @@ class Trainer:
 
         scheduler = None
         if self.cfg.use_warmup:
-            num_training_steps = stage_dict["epochs"] * len(self.train_loader)
+            steps_per_epoch = len(self.train_loader) // self.grad_accum_steps
+            num_training_steps = stage_dict["epochs"] * steps_per_epoch
             scheduler = build_scheduler_for_stage(
                 self.optimizer,
                 stage_dict=stage_dict,
@@ -365,13 +377,13 @@ class Trainer:
         best_val_loss, best_val_acc, epochs_no_improve = float("inf"), 0.0, 0
 
         for epoch in range(stage_dict["epochs"]):
-            train_loss, train_acc = self.run_epoch(stage_name, scheduler)
-            val_loss, val_acc = self.run_validation()
+            train_loss, train_acc, train_acc5 = self.run_epoch(stage_name, scheduler)
+            val_loss, val_acc, val_acc5 = self.run_validation()
 
             print(
                 f"[{stage_name}][Epoch {epoch}] "
-                f"train_loss={train_loss:.4f} train_acc={train_acc:.4f} | "
-                f"val_loss={val_loss:.4f} val_acc={val_acc:.4f}"
+                f"train_loss={train_loss:.4f} train_acc={train_acc:.4f} train_acc5={train_acc5:.4f} | "
+                f"val_loss={val_loss:.4f} val_acc={val_acc:.4f} val_acc5={val_acc5:.4f}"
             )
 
             if self.logger:
@@ -379,10 +391,13 @@ class Trainer:
                     "epoch": epoch,
                     f"{stage_name}/loss_epoch": train_loss,
                     f"{stage_name}/acc_epoch": train_acc,
+                    f"{stage_name}/acc5_epoch": train_acc5,
                     f"{stage_name}/val_loss_epoch": val_loss,
                     f"{stage_name}/val_acc_epoch": val_acc,
+                    f"{stage_name}/val_acc5_epoch": val_acc5,
                     "aggregate/val_loss_epoch": val_loss,
                     "aggregate/val_acc_epoch": val_acc,
+                    "aggregate/val_acc5_epoch": val_acc5,
                 })
 
             improved = (val_acc > best_val_acc) or (
@@ -408,7 +423,7 @@ class Trainer:
             self.run_stage(stage_dict)
 
 
-@hydra.main(config_path="../configs", config_name="chess_encoder_player_v2", version_base="1.1")
+@hydra.main(config_path="../configs", config_name="chess_encoder_player_v3", version_base="1.1")
 def main(cfg):
     set_seed(int(cfg.seed))
 
