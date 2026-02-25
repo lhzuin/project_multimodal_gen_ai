@@ -1,4 +1,4 @@
-from dataset.twic_download import download_twic_zips, build_merged_pgn_from_zips, twic_range
+from utils.twic_download import download_twic_zips, build_merged_pgn_from_zips, twic_range
 from dataset.offsets import ensure_offsets
 from torch.utils.data import DataLoader
 
