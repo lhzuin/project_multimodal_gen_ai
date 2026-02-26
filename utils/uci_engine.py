@@ -68,6 +68,7 @@ def main():
     ap.add_argument("--temperature", type=float, default=0.8)
     ap.add_argument("--topk", type=int, default=20)
     ap.add_argument("--greedy", action="store_true")
+    ap.add_argument("--n_layers", type=int, default=8)
     args = ap.parse_args()
 
     device = torch.device(args.device)
@@ -79,19 +80,33 @@ def main():
     if args.model_type == "decoder":
         if not args.tokenizer_path:
             raise SystemExit("--tokenizer_path required for decoder")
-        player = ChessDecoderPlayer(tokenizer_path=args.tokenizer_path, max_seq_len=args.max_seq_len)
-        player.load_state_dict(sd, strict=False)
+        player = ChessDecoderPlayer(tokenizer_path=args.tokenizer_path, max_seq_len=args.max_seq_len, n_layers=args.n_layers)
+        player.load_state_dict(sd, strict=True)
         player.eval().to(device)
         tok = player.decoder.tokenizer
 
-        def history_to_input_ids(moves_uci):
+        def history_to_inputs(moves_uci):
             ids = [tok.bos_id]
+            piece_ids = [tok.bos_id]
+
+            tmp = chess.Board()
             for u in moves_uci:
+                mv = chess.Move.from_uci(u)
+
+                moved_piece = tmp.piece_at(mv.from_square)
+                p = "P" if moved_piece is None else moved_piece.symbol().upper()  # 'P','N',...
+                piece_ids.append(tok.piece2id.get(p, tok.unk_id))
+
                 ids.append(tok.move2id.get(u, tok.unk_id))
+                tmp.push(mv)
+
             ids = ids[-args.max_seq_len:]
+            piece_ids = piece_ids[-args.max_seq_len:]
+
             input_ids = torch.tensor([ids], device=device, dtype=torch.long)
+            piece_input_ids = torch.tensor([piece_ids], device=device, dtype=torch.long)
             attn = torch.ones_like(input_ids, dtype=torch.long)
-            return input_ids, attn
+            return input_ids, piece_input_ids, attn
 
     else:
         player = ChessEncoderPlayer(img_size=256, vit_path=None, freeze_vit=True)
@@ -129,11 +144,13 @@ def main():
         fen = board.fen()
 
         if args.model_type == "decoder":
-            input_ids, attn = history_to_input_ids(moves_uci)
+            input_ids, piece_input_ids, attn = history_to_inputs(moves_uci)
             mv = player.sample_moves(
                 input_ids=input_ids,
+                piece_input_ids=piece_input_ids,
                 attention_mask=attn,
                 fen_list=[fen],
+                start_turn=torch.tensor([0], device=device),  # game starts at white
                 temperature=args.temperature,
                 topk=(args.topk if args.topk > 0 else None),
                 greedy=args.greedy,

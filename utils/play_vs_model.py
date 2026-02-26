@@ -21,6 +21,31 @@ def load_state_dict_any(ckpt_path: str):
     raise ValueError(f"Unrecognized checkpoint format: {type(obj)}")
 
 
+def history_to_inputs(tok, moves_uci, device, max_len=256):
+    ids = [tok.bos_id]
+    piece_ids = [tok.bos_id]
+
+    board = chess.Board()
+    for u in moves_uci:
+        mv = chess.Move.from_uci(u)
+        moved_piece = board.piece_at(mv.from_square)
+        # fallback
+        p = "P" if moved_piece is None else moved_piece.symbol().upper()  # 'P','N',...
+        piece_ids.append(tok.piece2id.get(p, tok.unk_id))
+
+        tid = tok.move2id.get(u, tok.unk_id)
+        ids.append(tid)
+        board.push(mv)
+
+    ids = ids[-max_len:]
+    piece_ids = piece_ids[-max_len:]
+
+    input_ids = torch.tensor([ids], device=device, dtype=torch.long)
+    piece_input_ids = torch.tensor([piece_ids], device=device, dtype=torch.long)
+    attn = torch.ones_like(input_ids, dtype=torch.long)
+    return input_ids, piece_input_ids, attn
+
+
 def strip_prefix_if_present(state_dict, prefix: str):
     if not any(k.startswith(prefix) for k in state_dict.keys()):
         return state_dict
@@ -110,6 +135,7 @@ def main():
     # decoder-specific
     ap.add_argument("--tokenizer_path", default=None, help="Needed for decoder (ChessLLM tokenizer)")
     ap.add_argument("--max_seq_len", type=int, default=256)
+    ap.add_argument("--n_layers", type=int, default=8)
 
     # encoder-specific
     ap.add_argument("--img_size", type=int, default=256, help="Only used to construct ChessEncoderPlayer")
@@ -133,11 +159,12 @@ def main():
         model = ChessDecoderPlayer(
             tokenizer_path=args.tokenizer_path,
             max_seq_len=args.max_seq_len,
+            n_layers=args.n_layers,
         )
         # common patterns: "module." or "model."
         sd2 = strip_prefix_if_present(sd, "module.")
         sd2 = strip_prefix_if_present(sd2, "model.")
-        model.load_state_dict(sd2, strict=False)
+        model.load_state_dict(sd2, strict=True)
         model.eval().to(device)
         tok = model.decoder.tokenizer
 
@@ -149,7 +176,7 @@ def main():
         )
         sd2 = strip_prefix_if_present(sd, "module.")
         sd2 = strip_prefix_if_present(sd2, "model.")
-        model.load_state_dict(sd2, strict=False)
+        model.load_state_dict(sd2, strict=True)
         model.eval().to(device)
 
     # --- game loop
@@ -163,12 +190,13 @@ def main():
         fen = board.fen()
 
         if args.model_type == "decoder":
-            input_ids, attn = history_to_input_ids(tok, moves_uci, device, max_len=args.max_seq_len)
+            input_ids, piece_input_ids, attn = history_to_inputs(tok, moves_uci, device, max_len=args.max_seq_len)
             mv = model.sample_moves(
                 input_ids=input_ids,
+                piece_input_ids=piece_input_ids,   # <-- add
                 attention_mask=attn,
                 fen_list=[fen],
-                start_turn=None,
+                start_turn=torch.tensor([0], device=device),  # game starts at white
                 temperature=args.temperature,
                 topk=(args.topk if args.topk > 0 else None),
                 greedy=args.greedy,

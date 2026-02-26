@@ -112,11 +112,12 @@ class ChessDecoderPlayer(nn.Module):
         fen_list,                  # list[str] current position per batch
         attention_mask=None,        # [B,T]
         start_turn=None,            # [B] optional
+        piece_input_ids=None,
         temperature: float = 1.0,
         topk: int | None = None,
         greedy: bool = False,
     ):
-        out = self.forward(input_ids=input_ids, attention_mask=attention_mask, start_turn=start_turn)
+        out = self.forward(input_ids=input_ids, attention_mask=attention_mask, start_turn=start_turn, piece_input_ids=piece_input_ids)
         next_logits = out["logits"][:, -1, :]  # [B,V]
         next_logits = next_logits / max(1e-6, float(temperature))
 
