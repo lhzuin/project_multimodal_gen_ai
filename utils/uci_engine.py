@@ -31,8 +31,8 @@ def board_to_piece_probs(board: chess.Board, device):
         x[0, sq, PIECE2IDX.get(p, 0)] = 1.0
     return x
 
-def board_metadata(board: chess.Board, device):
-    turn = torch.tensor([0 if board.turn == chess.WHITE else 1], device=device)
+def board_metadata(board: chess.Board, device): # Encoder only. Obs: white color=1 (different from decoder's turn encoding)
+    turn = torch.tensor([1 if board.turn == chess.WHITE else 0], device=device)
     castling = torch.tensor([[
         int(board.has_kingside_castling_rights(chess.WHITE)),
         int(board.has_queenside_castling_rights(chess.WHITE)),

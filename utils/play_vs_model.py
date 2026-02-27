@@ -86,7 +86,7 @@ def board_to_piece_probs(board: chess.Board, device):
 
 def board_metadata(board: chess.Board, device):
     # turn: [1] 0=white,1=black (your code expects float later) :contentReference[oaicite:3]{index=3}
-    turn = torch.tensor([0 if board.turn == chess.WHITE else 1], device=device)
+    turn = torch.tensor([1 if board.turn == chess.WHITE else 0], device=device)
 
     # castling: [1,4] (WK,WQ,BK,BQ) :contentReference[oaicite:4]{index=4}
     castling = torch.tensor([[
