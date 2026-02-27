@@ -56,7 +56,7 @@ class CollatePositionsFromGames:
 def collate_game_sequences(batch):
     batch = [b for b in batch if b.get("valid", False)]
     if len(batch) == 0:
-        return {"piece_probs": torch.empty(0)}
+        return {"labels64": torch.empty(0, dtype=torch.long)}
 
     # lengths
     lengths = torch.tensor([int(b["seq_len"].item()) for b in batch], dtype=torch.long)
@@ -66,6 +66,7 @@ def collate_game_sequences(batch):
     # allocate padded tensors
     #piece_probs = torch.zeros((B, T, 64, 13), dtype=torch.float32)
     labels64 = torch.zeros((B, T, 64), dtype=torch.long)
+    legal_flat = torch.zeros((B, T, 4096), dtype=torch.bool)
     turn = torch.zeros((B, T), dtype=torch.long)
     castling = torch.zeros((B, T, 4), dtype=torch.long)
     ep_square = torch.zeros((B, T), dtype=torch.long)
@@ -92,6 +93,7 @@ def collate_game_sequences(batch):
         castling[i, :Li] = b["castling"]
         ep_square[i, :Li] = b["ep_square"]
         labels64[i, :Li] = b["labels64"]
+        legal_flat[i, :Li] = b["legal_flat"]
 
         move_from[i, :Li] = b["move_from"]
         move_to[i, :Li] = b["move_to"]
@@ -103,6 +105,7 @@ def collate_game_sequences(batch):
     out = {
         #"piece_probs": piece_probs,   # [B,T,64,13]
         "labels64": labels64,       # [B,T,64]
+        "legal_flat": legal_flat,  # [B,T,4096]
         "turn": turn,                 # [B,T]
         "castling": castling,         # [B,T,4]
         "ep_square": ep_square,       # [B,T]

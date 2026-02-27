@@ -179,11 +179,14 @@ class Trainer:
 
     
     def _forward_loss_and_metrics(self, batch):
-        train_input = getattr(self.cfg, "train_input", "pieces")
-        assert train_input == "pieces", "Sequence dataset currently supports piece_probs only."
+        # Expect sequence batch:
+        # labels64: [B,T,64] long
+        # legal_flat: [B,T,4096] bool
+        # turn: [B,T], castling: [B,T,4], ep_square: [B,T]
+        # move_from/to/promo: [B,T]
+        # attn_mask: [B,T] bool
 
-        # [B,T,...]
-        # piece_probs = batch["piece_probs"].to(self.device, non_blocking=True)
+        labels64 = batch["labels64"].to(self.device, non_blocking=True)
         turn = batch["turn"].to(self.device, non_blocking=True)
         castling = batch["castling"].to(self.device, non_blocking=True)
         ep_square = batch["ep_square"].to(self.device, non_blocking=True)
@@ -192,22 +195,18 @@ class Trainer:
         move_to = batch["move_to"].to(self.device, non_blocking=True)
         move_promo = batch["move_promo"].to(self.device, non_blocking=True)
 
-        attn_mask = batch["attn_mask"].to(self.device, non_blocking=True)  # [B,T] bool
-
-        labels64 = batch["labels64"].to(self.device, non_blocking=True)  # [B,T,64]
+        attn_mask = batch["attn_mask"].to(self.device, non_blocking=True)  # [B,T]
         B, T, _ = labels64.shape
         BT = B * T
 
-        labels64_f = labels64.view(B*T, 64)                   # [BT,64]
-
-        piece_probs_f = torch.zeros((BT, 64, 13), device=labels64_f.device, dtype=torch.float16)
-        piece_probs_f.scatter_(2, labels64_f.unsqueeze(-1), 1.0)  # [BT,64,13]
+        # Flatten
+        labels64_f = labels64.view(BT, 64)       # [BT,64]
         turn_f = turn.view(BT)
         castling_f = castling.view(BT, 4)
         ep_f = ep_square.view(BT)
 
         out = self.model(
-            piece_probs=piece_probs_f,
+            labels64=labels64_f,   # <-- FAST PATH (embedding)
             turn=turn_f,
             castling=castling_f,
             ep_square=ep_f,
@@ -216,35 +215,23 @@ class Trainer:
         policy_logits = out["policy_logits"]  # [BT,64,64]
         promo_logits = out["promo_logits"]    # [BT,5]
 
-        # legal masking (flatten the ragged fen list)
-        if getattr(self.cfg, "use_legal_mask", True):
-            fen_ragged = batch["fen"]  # list[list[str]] of len B
-            fen_flat = []
-            for i in range(B):
-                fen_flat.extend(fen_ragged[i] + [""] * (T - len(fen_ragged[i])))
-            # fen_flat is length BT, but padded entries are "" (won't be used due to mask)
-
-            # Only compute mask for valid timesteps to avoid parsing "".
-            valid_flat = attn_mask.view(BT)
-            fen_valid = [fen_flat[i] for i in range(BT) if bool(valid_flat[i].item())]
-
-            # Build mask only for valid entries, then scatter back
-            legal_mask_valid = self.model.legal_mask_from_fen(fen_valid, device=policy_logits.device)  # [N,64,64]
-            legal_mask = torch.zeros((BT, 64, 64), dtype=torch.bool, device=policy_logits.device)
-            legal_mask[valid_flat] = legal_mask_valid
-
-            policy_logits = self.model.apply_legal_mask(policy_logits, legal_mask)
-
         flat_logits = policy_logits.view(BT, 4096)
 
-        target = (move_from * 64 + move_to).view(BT)        # [BT]
-        promo_t = move_promo.view(BT)                       # [BT]
-        valid = attn_mask.view(BT) & (move_from.view(BT) >= 0) & (move_to.view(BT) >= 0)
+        target = (move_from * 64 + move_to).view(BT)  # [BT]
+        promo_t = move_promo.view(BT)                 # [BT]
 
+        valid = attn_mask.view(BT) & (move_from.view(BT) >= 0) & (move_to.view(BT) >= 0)
         if valid.sum().item() == 0:
             return None
 
-        # losses on valid positions only
+        # NEW: apply legal mask from dataset (no FEN parsing)
+        if getattr(self.cfg, "use_legal_mask", True):
+            legal_flat = batch["legal_flat"].to(self.device, non_blocking=True).view(BT, 4096)  # [BT,4096]
+            # Only mask valid positions to avoid wasting compute (optional but cheap)
+            neg_inf = torch.finfo(flat_logits.dtype).min
+            flat_logits = flat_logits.masked_fill(~legal_flat, neg_inf)
+
+        # Loss on valid only
         loss_policy = F.cross_entropy(flat_logits[valid], target[valid])
         loss_promo = F.cross_entropy(promo_logits[valid], promo_t[valid])
         loss = loss_policy + loss_promo
@@ -252,7 +239,7 @@ class Trainer:
         if not torch.isfinite(loss):
             return None
 
-        # metrics on valid positions only
+        # metrics
         pred = flat_logits[valid].argmax(dim=-1)
         correct1 = (pred == target[valid]).sum().item()
 

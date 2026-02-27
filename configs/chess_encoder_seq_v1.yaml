@@ -11,7 +11,7 @@ use_legal_mask: true
 train_input: pieces   # or "image"
 
 trainer:
-  grad_accum_steps: 1 #4        # 256*4 = global batch 1024 (recommended)  [oai_citation:9‡Literature‑backed hyperparameters for a small–medium Transformer chess policy network.pdf](sediment://file_00000000921472468c25bbb345c81e8d)
+  grad_accum_steps: 4        # 256*4 = global batch 1024 (recommended)  [oai_citation:9‡Literature‑backed hyperparameters for a small–medium Transformer chess policy network.pdf](sediment://file_00000000921472468c25bbb345c81e8d)
   grad_clip_norm: 1.0
 
 data:
@@ -21,7 +21,7 @@ data:
 
 train_stages:
   - name: stage1
-    epochs: 20
+    epochs: 12
     warmup_fraction: 0.05
     lr_scheduler: cosine
     groups:
@@ -36,10 +36,10 @@ collate:
   _target_: dataset.collate.CollateGameSequences
 
 dataloader:
-  batch_size: 4
+  batch_size: 2
   shuffle: true
   num_workers: 4
-  pin_memory: false
+  pin_memory: true
   persistent_workers: true
   drop_last: false
 
@@ -51,9 +51,9 @@ dataset_train:
   seed: ${seed}
   max_seq_len: 64
   random_window: true
-  return_fen: true
+  return_fen: false
   return_images: false
-  return_piece_probs: true
+  return_piece_probs: false
   cache_size: 64
 
 dataset_val:
@@ -64,14 +64,15 @@ dataset_val:
   seed: ${seed}
   max_seq_len: 64
   random_window: false     # deterministic val is nicer
-  return_fen: true
+  return_fen: false
   return_images: false
-  return_piece_probs: true
+  return_piece_probs: false
   cache_size: 64
 
 model:
   instance:
-    _target_: models.chess_encoder_player.ChessEncoderPlayer
+    _target_: models.chess_encoder_player.ChessEncoderPlayerV2
+    piece_embed_dim: 32
     img_size: ${img_resolution}
     vit_path: ${hydra:runtime.cwd}/checkpoints/chess_classifier_vit_v2.pt
     freeze_vit: true

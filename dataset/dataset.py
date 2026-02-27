@@ -3,6 +3,7 @@ import os
 import json
 import random
 from dataclasses import dataclass
+from tracemalloc import start
 from typing import Any, Dict, Optional, List, Tuple
 from collections import OrderedDict
 
@@ -407,6 +408,8 @@ class ChessGameSequenceDataset(Dataset):
         # You can filter very short games if you want; for now keep all.
         self.game_list_indices = list(range(len(self.games)))
 
+        self.return_legal = True
+
     def __getstate__(self):
         state = self.__dict__.copy()
         state["_fh"] = None
@@ -497,8 +500,9 @@ class ChessGameSequenceDataset(Dataset):
         move_from_seq = []
         move_to_seq = []
         move_promo_seq = []
-        fen_seq = []
         labels64_seq = []
+
+        legal_flat_seq = []
 
         for ply in range(start, end):
             mv = moves[ply]
@@ -508,10 +512,7 @@ class ChessGameSequenceDataset(Dataset):
             labels64 = torch.from_numpy(grid.reshape(-1)).long()   # [64]
             labels64_seq.append(labels64)
 
-            # if self.return_piece_probs:
-            #     piece_probs = torch.nn.functional.one_hot(labels64, num_classes=13).float()  # [64,13]
-            #     piece_probs_seq.append(piece_probs)
-
+            # metadata
             turn_seq.append(torch.tensor(1 if board.turn else 0, dtype=torch.long))
 
             ck  = int(board.has_kingside_castling_rights(chess.WHITE))
@@ -522,8 +523,11 @@ class ChessGameSequenceDataset(Dataset):
 
             ep_seq.append(torch.tensor(board.ep_square if board.ep_square is not None else -1, dtype=torch.long))
 
-            if self.return_fen:
-                fen_seq.append(board.fen())
+            # NEW: legal mask for this board state as flat 4096
+            legal = torch.zeros(4096, dtype=torch.bool)
+            for m in board.legal_moves:
+                legal[m.from_square * 64 + m.to_square] = True
+            legal_flat_seq.append(legal)
 
             # --- target move encoding ---
             fs, ts, pr = encode_move_from_board(board, mv)
@@ -549,12 +553,9 @@ class ChessGameSequenceDataset(Dataset):
             "ep_square": torch.stack(ep_seq, dim=0),          # [T]
         }
 
-        # if self.return_piece_probs:
-        #     out["piece_probs"] = torch.stack(piece_probs_seq, dim=0)  # [T,64,13]
-        if self.return_fen:
-            out["fen"] = fen_seq  # list[str], length T
 
         out["labels64"] = torch.stack(labels64_seq, dim=0)  # [T,64]
+        out["legal_flat"] = torch.stack(legal_flat_seq, dim=0)  # [T,4096] bool
 
         # Images sequence is intentionally not implemented here (too slow / big).
         # If you really need it, we can add it later.
