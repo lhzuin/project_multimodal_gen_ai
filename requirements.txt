@@ -5,4 +5,5 @@ chess
 python-chess 
 pillow
 wandb
-hydra
+hydra-core>=1.3
+transformers

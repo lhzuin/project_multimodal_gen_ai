@@ -192,16 +192,26 @@ class DistillationShardReader:
         conn = self._get_conn()
         (n,) = conn.execute("SELECT COUNT(*) FROM samples;").fetchone()
         return int(n)
-
+    
     def get_by_index(self, idx0: int) -> Dict[str, Any]:
         conn = self._get_conn()
         row = conn.execute(
-            "SELECT * FROM samples ORDER BY id LIMIT 1 OFFSET ?;",
-            (int(idx0),),
+            "SELECT * FROM samples WHERE id = ?;",
+            (int(idx0) + 1,),
         ).fetchone()
         if row is None:
             raise IndexError(idx0)
         return dict(row)
+
+    # def get_by_index(self, idx0: int) -> Dict[str, Any]:
+    #     conn = self._get_conn()
+    #     row = conn.execute(
+    #         "SELECT * FROM samples ORDER BY id LIMIT 1 OFFSET ?;",
+    #         (int(idx0),),
+    #     ).fetchone()
+    #     if row is None:
+    #         raise IndexError(idx0)
+    #     return dict(row)
 
 
 def _worker_build_shard(

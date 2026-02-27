@@ -1,5 +1,5 @@
 
-experiment_name: "distill_encoder_v1"
+experiment_name: "distill_encoder_v2"
 wandb_project: "chess_vision"
 log: true
 seed: 42
@@ -12,9 +12,10 @@ use_legal_mask: true
 # Distillation DB settings
 distill:
   meta_path: ${hydra:runtime.cwd}/merged_distill/meta.json
-  tau: 50.0
+  tau: 10.0
   mate_cp: 20000
-  use_promo_loss: true
+  use_promo_loss: false
+  full_loss_coeff: 1.0
   promo_loss_weight: 1.0
   return_text: false
 

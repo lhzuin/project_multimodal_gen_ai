@@ -82,31 +82,59 @@ def split_indices(n: int, val_fraction: float, seed: int):
 def batch_is_empty(batch: dict) -> bool:
     # Distillation collate returns {"valid": False} when batch had no valid samples.
     if not isinstance(batch, dict):
+        print("Warning: expected batch to be a dict, got", type(batch))
         return True
     if batch.get("valid", True) is False:
+        print("Warning: batch marked as invalid (empty after filtering)")
         return True
     return False
 
 
-def teacher_sparse_ce(policy_logits_flat: torch.Tensor,
-                      teacher_idx: torch.Tensor,
-                      teacher_probs: torch.Tensor,
-                      teacher_mask: torch.Tensor) -> torch.Tensor:
-    """
-    policy_logits_flat: [B, 4096]
-    teacher_idx:        [B, K] with -1 for padding
-    teacher_probs:      [B, K] (already sums to 1 per row over valid entries)
-    teacher_mask:       [B, K] bool
-    Returns: mean loss over batch (float tensor)
-    """
-    # gather logits on teacher support
-    safe_idx = teacher_idx.clamp_min(0)  # avoid negative indices in gather
-    gathered = policy_logits_flat.gather(1, safe_idx)  # [B,K]
-    # mask out padded entries
+# def teacher_sparse_ce(policy_logits_flat: torch.Tensor,
+#                       teacher_idx: torch.Tensor,
+#                       teacher_probs: torch.Tensor,
+#                       teacher_mask: torch.Tensor) -> torch.Tensor:
+#     """
+#     policy_logits_flat: [B, 4096]
+#     teacher_idx:        [B, K] with -1 for padding
+#     teacher_probs:      [B, K] (already sums to 1 per row over valid entries)
+#     teacher_mask:       [B, K] bool
+#     Returns: mean loss over batch (float tensor)
+#     """
+#     # gather logits on teacher support
+#     safe_idx = teacher_idx.clamp_min(0)  # avoid negative indices in gather
+#     gathered = policy_logits_flat.gather(1, safe_idx)  # [B,K]
+#     # mask out padded entries
+#     gathered = gathered.masked_fill(~teacher_mask, float("-inf"))
+#     logp = torch.log_softmax(gathered, dim=-1)  # normalized on teacher support
+#     loss = -(teacher_probs * logp).sum(dim=-1)  # [B]
+#     return loss.mean()
+
+def teacher_sparse_ce_support(policy_logits_flat, teacher_idx, teacher_probs, teacher_mask):
+    safe_idx = teacher_idx.clamp_min(0)
+    gathered = policy_logits_flat.gather(1, safe_idx)          # [B,K]
     gathered = gathered.masked_fill(~teacher_mask, float("-inf"))
-    logp = torch.log_softmax(gathered, dim=-1)  # normalized on teacher support
-    loss = -(teacher_probs * logp).sum(dim=-1)  # [B]
+
+    logp = torch.log_softmax(gathered, dim=-1)                 # [B,K]
+    logp = logp.masked_fill(~teacher_mask, 0.0)                # IMPORTANT: avoid 0 * -inf
+
+    # (optional but nice)
+    teacher_probs = teacher_probs.masked_fill(~teacher_mask, 0.0)
+
+    loss = -(teacher_probs * logp).sum(dim=-1)                 # [B]
     return loss.mean()
+
+
+def teacher_sparse_ce_full(policy_logits_flat, teacher_idx, teacher_probs, teacher_mask):
+    # full distribution over 4096
+    logp_full = torch.log_softmax(policy_logits_flat, dim=-1)   # [B,4096]
+
+    safe_idx = teacher_idx.clamp_min(0)
+    logp_sup = logp_full.gather(1, safe_idx)                   # [B,K]
+    logp_sup = logp_sup.masked_fill(~teacher_mask, 0.0)
+
+    teacher_probs = teacher_probs.masked_fill(~teacher_mask, 0.0)
+    return -(teacher_probs * logp_sup).sum(dim=-1).mean()
 
 
 def promo_distill_ce(promo_logits: torch.Tensor,
@@ -196,8 +224,28 @@ class Trainer:
 
         print(f"Distill DB size={len(ds)} | train={len(train_ds)} | val={len(val_ds)}")
 
+        print("len(ds)=", len(ds))
+        print("len(train_ds)=", len(train_ds), "len(val_ds)=", len(val_ds))
+        print("batch_size=", dl_cfg.batch_size)
+        print("len(train_loader)=", len(self.train_loader), "len(val_loader)=", len(self.val_loader))
+        print("num_workers=", dl_cfg.num_workers, "persistent=", dl_cfg.persistent_workers)
+    
     def init_model(self):
         self.model = hydra.utils.instantiate(self.cfg.model.instance).to(self.device)
+
+        # Load pretrained full-model checkpoint if provided
+        pretrained = getattr(self.cfg.model, "pretrained_path", None)
+        if pretrained:
+            state = torch.load(pretrained, map_location=self.device)
+
+            # handle either raw state_dict or {"state_dict": ...}
+            if isinstance(state, dict) and "state_dict" in state:
+                state = state["state_dict"]
+
+            strict = bool(getattr(self.cfg.model, "strict_pretrained", True))
+            missing, unexpected = self.model.load_state_dict(state, strict=strict)
+            print(f"[pretrained] loaded from {pretrained} | missing={len(missing)} unexpected={len(unexpected)}")
+
 
     def _forward_loss_and_metrics(self, batch):
         # Teacher (sparse)
@@ -238,7 +286,10 @@ class Trainer:
         teacher_idx = teacher_from * 64 + teacher_to  # [B,K], -64.. etc if padded; mask will remove
         teacher_idx = teacher_idx.to(dtype=torch.long)
 
-        loss_policy = teacher_sparse_ce(flat_logits, teacher_idx, teacher_probs, teacher_mask)
+        loss_support = teacher_sparse_ce_support(flat_logits, teacher_idx, teacher_probs, teacher_mask)
+        loss_full = teacher_sparse_ce_full(flat_logits, teacher_idx, teacher_probs, teacher_mask)
+        full_coeff = getattr(self.cfg.distill, "full_loss_coeff", 1.0)
+        loss_policy = full_coeff * loss_full + (1.0 - full_coeff) * loss_support
 
         # Promo distillation (optional)
         loss_promo = torch.tensor(0.0, device=self.device)
@@ -252,6 +303,7 @@ class Trainer:
 
         loss = loss_policy + float(getattr(self.cfg.distill, "promo_loss_weight", 1.0)) * loss_promo
         if not torch.isfinite(loss):
+            print(f"Non-finite loss encountered: {loss.item()} | skipping batch")
             return None
 
         # Metrics: match teacher top-1 (argmax over teacher support)
@@ -265,12 +317,32 @@ class Trainer:
         topk_idx = torch.topk(flat_logits, k=5, dim=-1).indices
         correct5 = (topk_idx == teacher_best_idx.unsqueeze(1)).any(dim=1).sum().item()
 
-        return loss, correct1, correct5, B2, float(loss_policy.detach().cpu().item()), float(loss_promo.detach().cpu().item())
+
+        tp = teacher_probs  # [B,K]
+        tm = teacher_mask   # [B,K]
+        eps = 1e-8
+        tp2 = tp.masked_fill(~tm, 0.0)
+        H = -(tp2 * (tp2 + eps).log()).sum(dim=-1).mean()
+
+        K = teacher_mask.sum(dim=-1).float().clamp_min(1.0)
+        logK = K.log().mean()
+
+        # after flat_logits exists and teacher_idx/teacher_mask exist
+        with torch.no_grad():
+            logp_full = torch.log_softmax(flat_logits, dim=-1)  # [B,4096]
+            sup = logp_full.gather(1, teacher_idx.clamp_min(0)) # [B,K]
+            sup = sup.masked_fill(~teacher_mask, float("-inf"))
+            support_mass = torch.exp(torch.logsumexp(sup, dim=-1)).mean()
+
+        return loss, correct1, correct5, B2, float(loss_policy.detach().cpu().item()), float(loss_promo.detach().cpu().item()), float(H.detach().cpu().item()), float(logK.detach().cpu().item()), float(loss_support.detach().cpu().item()), float(loss_full.detach().cpu().item()), float(support_mass.detach().cpu().item())
 
     def run_epoch(self, stage_name, scheduler):
         self.model.train()
         total_loss, total_correct, total_correct5, total_n = 0.0, 0, 0, 0
         total_policy_loss, total_promo_loss = 0.0, 0.0
+        total_H, total_logK = 0.0, 0.0
+        total_loss_support = 0.0
+        total_loss_full = 0.0
 
         accum = 0
         self.optimizer.zero_grad(set_to_none=True)
@@ -278,6 +350,7 @@ class Trainer:
         progress = tqdm(self.train_loader, desc=f"{stage_name} | distill-train", leave=False)
         for batch in progress:
             if batch_is_empty(batch):
+                print("Skipping empty batch")
                 continue
 
             if self.scaler:
@@ -285,29 +358,33 @@ class Trainer:
                     res = self._forward_loss_and_metrics(batch)
                     if res is None:
                         continue
-                    loss, correct, correct5, n, lp, lpr = res
+                    loss, correct, correct5, n, lp, lpr, H, logK, loss_support, loss_full, support_mass = res
                     loss_scaled = loss / self.grad_accum_steps
                 self.scaler.scale(loss_scaled).backward()
             else:
                 res = self._forward_loss_and_metrics(batch)
                 if res is None:
                     continue
-                loss, correct, correct5, n, lp, lpr = res
+                loss, correct, correct5, n, lp, lpr, H, logK, loss_support, loss_full, support_mass = res
                 (loss / self.grad_accum_steps).backward()
 
             accum += 1
 
             loss_val = float(loss.detach().cpu().item())
             total_loss += loss_val * n
+            total_loss_support += loss_support*n
+            total_loss_full += loss_full*n
             total_policy_loss += float(lp) * n
             total_promo_loss += float(lpr) * n
+            total_H += float(H) * n
+            total_logK += float(logK) * n
             total_correct += correct
             total_correct5 += correct5
             total_n += n
 
             acc_val = correct / max(1, n)
             acc5_val = correct5 / max(1, n)
-            progress.set_postfix(loss=f"{loss_val:.4f}", acc=f"{acc_val:.3f}", acc5=f"{acc5_val:.3f}")
+            progress.set_postfix(loss=f"{loss_val:.4f}", acc=f"{acc_val:.3f}", acc5=f"{acc5_val:.3f}", loss_support=f"{loss_support:.2f}", loss_full=f"{loss_full:.2f}")
 
             if self.logger:
                 wandb.log({
@@ -316,6 +393,11 @@ class Trainer:
                     f"{stage_name}/promo_loss_step": float(lpr),
                     f"{stage_name}/acc_step": acc_val,
                     f"{stage_name}/acc5_step": acc5_val,
+                    f"{stage_name}/teacher_entropy_step": float(H),
+                    f"{stage_name}/logK_step": float(logK),
+                    f"{stage_name}/support_mass_step": float(support_mass),
+                    f"{stage_name}/loss_support_step": float(loss_support),
+                    f"{stage_name}/loss_full_step": float(loss_full),
                     "aggregate/loss_step": loss_val,
                 })
 
@@ -339,6 +421,10 @@ class Trainer:
             total_correct5 / max(1, total_n),
             total_policy_loss / max(1, total_n),
             total_promo_loss / max(1, total_n),
+            total_H / max(1, total_n),
+            total_logK / max(1, total_n),
+            total_loss_support / max(1, total_n),
+            total_loss_full / max(1, total_n),
         )
 
     @torch.no_grad()
@@ -346,6 +432,8 @@ class Trainer:
         self.model.eval()
         total_loss, total_correct, total_correct5, total_n = 0.0, 0, 0, 0
         total_policy_loss, total_promo_loss = 0.0, 0.0
+        total_H, total_logK = 0.0, 0.0
+        total_loss_support, total_loss_full = 0.0, 0.0
 
         for batch in self.val_loader:
             if batch_is_empty(batch):
@@ -353,10 +441,14 @@ class Trainer:
             res = self._forward_loss_and_metrics(batch)
             if res is None:
                 continue
-            loss, correct, correct5, n, lp, lpr = res
+            loss, correct, correct5, n, lp, lpr, H, logK, loss_support, loss_full, support_mass = res
             total_loss += float(loss.detach().cpu().item()) * n
             total_policy_loss += float(lp) * n
             total_promo_loss += float(lpr) * n
+            total_H += float(H) * n
+            total_logK += float(logK) * n
+            total_loss_support += float(loss_support) * n
+            total_loss_full += float(loss_full) * n
             total_correct += correct
             total_correct5 += correct5
             total_n += n
@@ -367,6 +459,10 @@ class Trainer:
             total_correct5 / max(1, total_n),
             total_policy_loss / max(1, total_n),
             total_promo_loss / max(1, total_n),
+            total_H / max(1, total_n),
+            total_logK / max(1, total_n),
+            total_loss_support / max(1, total_n),
+            total_loss_full / max(1, total_n),
         )
 
     def run_stage(self, stage_dict):
@@ -397,15 +493,18 @@ class Trainer:
         best_val_loss, best_val_acc, epochs_no_improve = float("inf"), 0.0, 0
 
         for epoch in range(stage_dict["epochs"]):
-            train_loss, train_acc, train_acc5, train_pl, train_pr = self.run_epoch(stage_name, scheduler)
-            val_loss, val_acc, val_acc5, val_pl, val_pr = self.run_validation()
+            train_loss, train_acc, train_acc5, train_pl, train_pr, train_H, train_logK, train_loss_support, train_loss_full = self.run_epoch(stage_name, scheduler)
+            val_loss, val_acc, val_acc5, val_pl, val_pr, val_H, val_logK, val_loss_support, val_loss_full = self.run_validation()
 
             print(
                 f"[{stage_name}][Epoch {epoch}] "
                 f"train_loss={train_loss:.4f} train_acc={train_acc:.4f} train_acc5={train_acc5:.4f} "
                 f"(policy={train_pl:.4f}, promo={train_pr:.4f}) | "
                 f"val_loss={val_loss:.4f} val_acc={val_acc:.4f} val_acc5={val_acc5:.4f} "
-                f"(policy={val_pl:.4f}, promo={val_pr:.4f})"
+                f"(policy={val_pl:.4f}, promo={val_pr:.4f}) | "
+                f"train_H={train_H:.4f} train_logK={train_logK:.4f} | val_H={val_H:.4f} val_logK={val_logK:.4f} | "
+                f"train_loss_support={train_loss_support:.2f} train_loss_full={train_loss_full:.2f} | "
+                f"val_loss_support={val_loss_support:.2f} val_loss_full={val_loss_full:.2f}"
             )
 
             if self.logger:
@@ -416,11 +515,16 @@ class Trainer:
                     f"{stage_name}/acc5_epoch": train_acc5,
                     f"{stage_name}/policy_loss_epoch": train_pl,
                     f"{stage_name}/promo_loss_epoch": train_pr,
+                    f"{stage_name}/train_loss_support_epoch": train_loss_support,
+                    f"{stage_name}/train_loss_full_epoch": train_loss_full,
                     f"{stage_name}/val_loss_epoch": val_loss,
                     f"{stage_name}/val_acc_epoch": val_acc,
                     f"{stage_name}/val_acc5_epoch": val_acc5,
                     f"{stage_name}/val_policy_loss_epoch": val_pl,
                     f"{stage_name}/val_promo_loss_epoch": val_pr,
+                    f"{stage_name}/val_loss_support_epoch": val_loss_support,
+                    f"{stage_name}/val_loss_full_epoch": val_loss_full,
+                    
                     "aggregate/val_loss_epoch": val_loss,
                     "aggregate/val_acc_epoch": val_acc,
                     "aggregate/val_acc5_epoch": val_acc5,
@@ -449,7 +553,7 @@ class Trainer:
             self.run_stage(stage_dict)
 
 
-@hydra.main(config_path="../configs", config_name="distillation_encoder", version_base="1.1")
+@hydra.main(config_path="../configs", config_name="distillation_encoder_v5", version_base="1.1")
 def main(cfg):
     set_seed(int(cfg.seed))
 

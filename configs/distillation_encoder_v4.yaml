@@ -1,5 +1,5 @@
 
-experiment_name: "distill_encoder_v1"
+experiment_name: "distill_encoder_v4"
 wandb_project: "chess_vision"
 log: true
 seed: 42
@@ -12,9 +12,10 @@ use_legal_mask: true
 # Distillation DB settings
 distill:
   meta_path: ${hydra:runtime.cwd}/merged_distill/meta.json
-  tau: 50.0
+  tau: 10.0
   mate_cp: 20000
-  use_promo_loss: true
+  use_promo_loss: false
+  full_loss_coeff: 0.7
   promo_loss_weight: 1.0
   return_text: false
 
@@ -39,7 +40,7 @@ dataloader:
 train_stages:
   - name: stage1
     epochs: 10
-    warmup_fraction: 0.05
+    warmup_fraction: 0.15
     lr_scheduler: cosine
     groups:
       encoder: lr_enc
@@ -67,6 +68,6 @@ optim:
   _target_: torch.optim.AdamW
   betas: [0.9, 0.98]
   eps: 1.0e-8
-  lr_enc: 1e-4
-  lr_class: 3e-4
+  lr_enc: 2e-5
+  lr_class: 8e-5
   weight_decay: 0.01
