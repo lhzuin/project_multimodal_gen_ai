@@ -644,7 +644,7 @@ class DistillationEncoderDataset(Dataset):
             piece_probs = torch.nn.functional.one_hot(labels64, num_classes=13).float()
 
             # IMPORTANT: match ChessGameSampleDataset convention: 1=white, 0=black
-            turn = torch.tensor(1 if board.turn else 0, dtype=torch.long)
+            turn = torch.tensor(1 if board.turn else 0, dtype=torch.long) #Obs: for decoder model the convention is 0=white, 1=black, but for encoder it's 1=white, 0=black.
 
             ck  = int(board.has_kingside_castling_rights(chess.WHITE))
             cq  = int(board.has_queenside_castling_rights(chess.WHITE))

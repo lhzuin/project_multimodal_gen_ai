@@ -24,12 +24,12 @@ PIECE2IDX = {
     chess.Piece(chess.KING, chess.BLACK): 12,
 }
 
-def board_to_piece_probs(board: chess.Board, device):
-    x = torch.zeros((1, 64, 13), dtype=torch.float32, device=device)
-    for sq in chess.SQUARES:
-        p = board.piece_at(sq)
-        x[0, sq, PIECE2IDX.get(p, 0)] = 1.0
-    return x
+# def board_to_piece_probs(board: chess.Board, device):
+#     x = torch.zeros((1, 64, 13), dtype=torch.float32, device=device)
+#     for sq in chess.SQUARES:
+#         p = board.piece_at(sq)
+#         x[0, sq, PIECE2IDX.get(p, 0)] = 1.0
+#     return x
 
 def board_metadata(board: chess.Board, device): # Encoder only. Obs: white color=1 (different from decoder's turn encoding)
     turn = torch.tensor([1 if board.turn == chess.WHITE else 0], device=device)
@@ -42,6 +42,22 @@ def board_metadata(board: chess.Board, device): # Encoder only. Obs: white color
     ep = -1 if board.ep_square is None else int(board.ep_square)
     ep_square = torch.tensor([ep], device=device)
     return turn, castling, ep_square
+
+def flip_rank_square(sq: int) -> int:
+    # python-chess: sq = file + 8*rank, rank in [0..7]
+    file = sq % 8
+    rank = sq // 8
+    flipped_rank = 7 - rank
+    return flipped_rank * 8 + file
+
+def board_to_piece_probs(board: chess.Board, device) -> torch.Tensor:
+    x = torch.zeros((1, 64, 13), dtype=torch.float32, device=device)
+    for sq in chess.SQUARES:
+        p = board.piece_at(sq)
+        idx = PIECE2IDX.get(p, 0)
+        ds_idx = flip_rank_square(sq)   # <-- KEY LINE
+        x[0, ds_idx, idx] = 1.0
+    return x
 
 def load_state_dict_any(path: str):
     print(f"Loading checkpoint from {path}...")

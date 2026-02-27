@@ -117,7 +117,8 @@ class ChessEncoderPlayer(nn.Module):
     # --------------------
     # Forward
     # --------------------
-    def forward(self, *, images=None, piece_probs=None, piece_logits=None, turn=None, castling=None, ep_square=None):
+    def forward(self, *, images=None, piece_probs=None, piece_logits=None, turn=None, castling=None, ep_square=None): 
+        #Obs: white color=1 (different from decoder's turn encoding)
         if turn is None or castling is None or ep_square is None:
             raise ValueError("turn, castling, ep_square are required.")
 

@@ -74,13 +74,30 @@ PIECE2IDX = {
 }
 
 
-def board_to_piece_probs(board: chess.Board, device):
-    # [1,64,13] one-hot "probabilities"
+# def board_to_piece_probs(board: chess.Board, device):
+#     # [1,64,13] one-hot "probabilities"
+#     x = torch.zeros((1, 64, 13), dtype=torch.float32, device=device)
+#     for sq in chess.SQUARES:
+#         p = board.piece_at(sq)
+#         idx = PIECE2IDX.get(p, 0)
+#         x[0, sq, idx] = 1.0
+#     return x
+
+
+def flip_rank_square(sq: int) -> int:
+    # python-chess: sq = file + 8*rank, rank in [0..7]
+    file = sq % 8
+    rank = sq // 8
+    flipped_rank = 7 - rank
+    return flipped_rank * 8 + file
+
+def board_to_piece_probs(board: chess.Board, device) -> torch.Tensor:
     x = torch.zeros((1, 64, 13), dtype=torch.float32, device=device)
     for sq in chess.SQUARES:
         p = board.piece_at(sq)
         idx = PIECE2IDX.get(p, 0)
-        x[0, sq, idx] = 1.0
+        ds_idx = flip_rank_square(sq)   # <-- KEY LINE
+        x[0, ds_idx, idx] = 1.0
     return x
 
 
