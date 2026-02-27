@@ -1,0 +1,74 @@
+
+experiment_name: "distill_encoder_v5_zero"
+wandb_project: "chess_vision"
+log: true
+seed: 42
+acc_epsilon: 1e-3
+
+
+checkpoint_save_path: ${experiment_name}.pt
+use_warmup: true
+use_legal_mask: true
+
+# Distillation DB settings
+distill:
+  meta_path: ${hydra:runtime.cwd}/merged_distill/meta.json
+  tau: 10.0
+  mate_cp: 20000
+  use_promo_loss: false
+  full_loss_coeff: 0.9
+  promo_loss_weight: 1.0
+  return_text: false
+
+# NOTE: distillation dataset reconstructs piece_probs+state from FEN (same conventions as ChessGameSampleDataset).
+train_input: pieces
+
+trainer:
+  grad_accum_steps: 1
+  grad_clip_norm: 1.0
+
+data:
+  val_fraction: 0.05
+
+dataloader:
+  batch_size: 256
+  shuffle: true
+  num_workers: 4
+  pin_memory: false
+  persistent_workers: true
+  drop_last: false
+
+train_stages:
+  - name: stage1
+    epochs: 10
+    warmup_fraction: 0.15
+    lr_scheduler: cosine
+    groups:
+      encoder: lr_enc
+      classifier: lr_class
+
+early_stopping:
+  patience: 2
+  min_epochs: 2
+
+model:
+  #pretrained_path: ${hydra:runtime.cwd}/checkpoints/chess_encoder_player_v3.pt
+  strict_pretrained: true   # or false if you expect mismatch
+  instance:
+    _target_: models.chess_encoder_player.ChessEncoderPlayer
+    img_size: 256
+    vit_path: null #${hydra:runtime.cwd}/checkpoints/chess_encoder_player_v3.pt
+    freeze_vit: true
+    ep_embed_dim: 16
+    encoder_dim: 256
+    n_heads: 4
+    n_layers: 6
+    encoder_dropout: 0.1
+
+optim:
+  _target_: torch.optim.AdamW
+  betas: [0.9, 0.98]
+  eps: 1.0e-8
+  lr_enc: 1.5e-4               
+  lr_class: 5e-4 
+  weight_decay: 0.01
