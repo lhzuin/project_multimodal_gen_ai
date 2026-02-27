@@ -38,14 +38,14 @@ class StockfishDistillationBuildConfig:
     # Source games
     start_week: int
     end_week: int
-    out_pgn_path: str = "processed_games/games_stockfish.pgn"
-    out_index_path: str = "processed_games/games_stockfish_index.json"
+    out_pgn_path: str = "processed_games/games_stockfish79.pgn"
+    out_index_path: str = "processed_games/games_stockfish79_index.json"
 
     # Sampling
     sample_ratio: float = 0.15
     max_positions_per_game: int = 32
     seed: int = 42
-    samples_path: str = "processed_games/games_stockfish_samples.json"
+    samples_path: str = "processed_games/games_stockfish79_samples.json"
 
     # Stockfish
     engine_path: str = "stockfish"
@@ -101,15 +101,15 @@ class BuildStockfishDistillationDB:
 if __name__ == "__main__":
     # Example usage (edit values in-place):
     cfg = StockfishDistillationBuildConfig(
-        start_week=1463,
-        end_week=1483,
+        start_week=1479,
+        end_week=1479,
         sample_ratio=0.15,
         max_positions_per_game=32,
         engine_path=os.environ.get("STOCKFISH_PATH", "stockfish"),
-        movetime_ms=100,
+        movetime_ms=500,
         k=5,
-        num_workers=10,
-        out_db_dir="distill_db",
+        num_workers=4,
+        out_db_dir="distill_db79",
     )
     b = BuildStockfishDistillationDB(cfg)
     b.prepare_pgn()
