@@ -354,3 +354,209 @@ class ChessGameSampleDataset(Dataset):
             out["piece_probs"] = piece_probs
 
         return out
+    
+
+
+class ChessGameSequenceDataset(Dataset):
+    """
+    Game-level sequence dataset:
+      __getitem__(i) returns a sequence of positions from ONE game.
+
+    Each timestep t contains:
+      - board state BEFORE playing move t
+      - target = move t (from,to,promo)
+
+    We optionally take a random contiguous window of length <= max_seq_len to
+    keep memory bounded.
+    """
+    def __init__(
+        self,
+        pgn_path: str,
+        index_path: str,
+        sprites_dir: str,          # kept for API consistency (not used if return_images=False)
+        resolution: int = 256,     # kept for API consistency
+        seed: int = 0,
+        max_seq_len: int = 64,
+        random_window: bool = True,
+        return_fen: bool = True,
+        return_images: bool = False,
+        return_piece_probs: bool = True,
+        cache_size: int = 64,
+    ):
+        self.pgn_path = pgn_path
+        self.index_path = index_path
+        self.seed = int(seed)
+        self.max_seq_len = int(max_seq_len)
+        self.random_window = bool(random_window)
+
+        self.return_fen = bool(return_fen)
+        self.return_images = bool(return_images)  # supported but default False (much faster)
+        self.return_piece_probs = bool(return_piece_probs)
+
+        # Load offsets
+        ensure_offsets(pgn_path, index_path)
+        self.index = load_pgn_offsets(index_path)
+        self.games = self.index["games"]
+
+        # Runtime state per worker
+        self._fh = None
+        self.cache_size = int(cache_size)
+        self._cache: Optional[OrderedDict[int, Optional[Tuple[str, List[chess.Move]]]]] = None
+
+        # NOTE: We do NOT precompute samples here. Dataset length = number of games.
+        # You can filter very short games if you want; for now keep all.
+        self.game_list_indices = list(range(len(self.games)))
+
+    def __getstate__(self):
+        state = self.__dict__.copy()
+        state["_fh"] = None
+        state["_cache"] = None
+        return state
+
+    def __len__(self) -> int:
+        return len(self.game_list_indices)
+
+    def _get_fh(self):
+        if self._fh is None:
+            self._fh = open(self.pgn_path, "rb")
+        return self._fh
+
+    def _read_game_bytes(self, start: int, end: int) -> bytes:
+        fh = self._get_fh()
+        fh.seek(start)
+        return fh.read(end - start)
+
+    def _get_cache(self):
+        if self.cache_size <= 0:
+            return None
+        if self._cache is None:
+            self._cache = OrderedDict()
+        return self._cache
+
+    def _load_moves_for_game(self, game_list_idx: int) -> Optional[Tuple[str, List[chess.Move]]]:
+        cache = self._get_cache()
+        if cache is not None and game_list_idx in cache:
+            value = cache.pop(game_list_idx)
+            cache[game_list_idx] = value
+            return value
+
+        g = self.games[game_list_idx]
+        game_bytes = self._read_game_bytes(g["start"], g["end"])
+        game = _parse_game_bytes(game_bytes)
+
+        if game is None:
+            value = None
+        else:
+            start_fen = game.board().fen()
+            moves = list(game.mainline_moves())
+            value = (start_fen, moves)
+
+        if cache is not None:
+            cache[game_list_idx] = value
+            if len(cache) > self.cache_size:
+                cache.popitem(last=False)
+
+        return value
+
+    def __getitem__(self, idx: int) -> Dict[str, Any]:
+        game_list_idx = self.game_list_indices[idx]
+        g = self.games[game_list_idx]
+
+        loaded = self._load_moves_for_game(game_list_idx)
+        if loaded is None:
+            return {"valid": False}
+
+        start_fen, moves = loaded
+        n = len(moves)
+        if n <= 0:
+            return {"valid": False}
+
+        # Choose a contiguous window
+        L = min(self.max_seq_len, n)
+        if self.random_window and n > L:
+            # per-call randomness is OK; workers each have their own RNG stream
+            start = random.randint(0, n - L)
+        else:
+            start = 0
+
+        end = start + L
+
+        board = chess.Board(start_fen)
+        # advance to window start
+        try:
+            for ply in range(start):
+                board.push(moves[ply])
+        except AssertionError:
+            return {"valid": False}
+
+        # Build sequence tensors
+        piece_probs_seq = []
+        turn_seq = []
+        castling_seq = []
+        ep_seq = []
+        move_from_seq = []
+        move_to_seq = []
+        move_promo_seq = []
+        fen_seq = []
+        labels64_seq = []
+
+        for ply in range(start, end):
+            mv = moves[ply]
+
+            # --- state BEFORE move ---
+            grid = board_to_grid_ids(board)
+            labels64 = torch.from_numpy(grid.reshape(-1)).long()   # [64]
+            labels64_seq.append(labels64)
+
+            # if self.return_piece_probs:
+            #     piece_probs = torch.nn.functional.one_hot(labels64, num_classes=13).float()  # [64,13]
+            #     piece_probs_seq.append(piece_probs)
+
+            turn_seq.append(torch.tensor(1 if board.turn else 0, dtype=torch.long))
+
+            ck  = int(board.has_kingside_castling_rights(chess.WHITE))
+            cq  = int(board.has_queenside_castling_rights(chess.WHITE))
+            ck2 = int(board.has_kingside_castling_rights(chess.BLACK))
+            cq2 = int(board.has_queenside_castling_rights(chess.BLACK))
+            castling_seq.append(torch.tensor([ck, cq, ck2, cq2], dtype=torch.long))
+
+            ep_seq.append(torch.tensor(board.ep_square if board.ep_square is not None else -1, dtype=torch.long))
+
+            if self.return_fen:
+                fen_seq.append(board.fen())
+
+            # --- target move encoding ---
+            fs, ts, pr = encode_move_from_board(board, mv)
+            move_from_seq.append(torch.tensor(fs, dtype=torch.long))
+            move_to_seq.append(torch.tensor(ts, dtype=torch.long))
+            move_promo_seq.append(torch.tensor(pr, dtype=torch.long))
+
+            # advance
+            try:
+                board.push(mv)
+            except AssertionError:
+                return {"valid": False}
+
+        out = {
+            "valid": True,
+            "game_idx": torch.tensor(g["idx"], dtype=torch.long),
+            "seq_len": torch.tensor(L, dtype=torch.long),
+            "move_from": torch.stack(move_from_seq, dim=0),   # [T]
+            "move_to": torch.stack(move_to_seq, dim=0),       # [T]
+            "move_promo": torch.stack(move_promo_seq, dim=0), # [T]
+            "turn": torch.stack(turn_seq, dim=0),             # [T]
+            "castling": torch.stack(castling_seq, dim=0),     # [T,4]
+            "ep_square": torch.stack(ep_seq, dim=0),          # [T]
+        }
+
+        # if self.return_piece_probs:
+        #     out["piece_probs"] = torch.stack(piece_probs_seq, dim=0)  # [T,64,13]
+        if self.return_fen:
+            out["fen"] = fen_seq  # list[str], length T
+
+        out["labels64"] = torch.stack(labels64_seq, dim=0)  # [T,64]
+
+        # Images sequence is intentionally not implemented here (too slow / big).
+        # If you really need it, we can add it later.
+
+        return out

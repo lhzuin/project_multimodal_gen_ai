@@ -32,12 +32,21 @@ import random
 import sys
 import time
 import shutil
+import torch
 from dataclasses import dataclass, asdict
 from typing import Any, Dict, List, Optional, Tuple
 
 import chess
 import chess.engine
 import chess.pgn
+
+
+
+device = (
+    "cuda" if torch.cuda.is_available()
+    else "mps" if torch.backends.mps.is_available()
+    else "cpu"
+)
 
 
 # ----------------------------
@@ -158,11 +167,10 @@ def launch_model_uci_engine(args) -> chess.engine.SimpleEngine:
 
     utils_dir = os.path.dirname(model_uci_abs)
     repo_root = os.path.dirname(utils_dir)
-
     cmd = [args.python, "-u", model_uci_abs,
            "--model_type", args.model_type,
            "--ckpt", args.ckpt,
-           "--device", args.device,
+           "--device", device,
            "--temperature", str(args.temperature),
            "--topk", str(args.topk)]
     if args.greedy:
@@ -663,7 +671,7 @@ def run_tournament(args) -> Tuple[TournamentSummary, List[PlayedGame]]:
             "model_type": args.model_type,
             "ckpt": args.ckpt,
             "tokenizer_path": args.tokenizer_path,
-            "device": args.device,
+            "device": device,
             "temperature": args.temperature,
             "topk": args.topk,
             "greedy": bool(args.greedy),
@@ -702,7 +710,6 @@ def main():
     ap.add_argument("--python", default=sys.executable, help="Python executable to run the model UCI engine.")
     ap.add_argument("--model_type", choices=["decoder", "encoder"], required=True)
     ap.add_argument("--ckpt", required=True)
-    ap.add_argument("--device", default="cuda")
 
     # Model sampling params (forwarded to uci_engine.py)
     ap.add_argument("--temperature", type=float, default=0.8)
