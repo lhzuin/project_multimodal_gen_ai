@@ -40,6 +40,7 @@ from omegaconf import OmegaConf
 # ---- repo-local imports (adjust if needed) ----
 from dataset.distillation_db import DistillationEncoderDataset, DistillationShardReader, _MultiShardIndex, _scores_to_probs
 from models.chess_encoder_player import ChessEncoderPlayer
+from models.chess_decoder_player import ChessDecoderPlayer
 
 
 PROMO_TO_CLASS = {
@@ -96,6 +97,143 @@ def load_model_from_cfg(cfg, ckpt_path: str, device: str):
     return model
 
 
+def load_decoder_model(
+    *,
+    tokenizer_path: str,
+    ckpt_path: str,
+    device: str,
+    model_dim: int = 256,
+    mlp_ratio: float = 4.0,
+    n_heads: int = 4,
+    n_layers: int = 6,
+    dropout: float = 0.1,
+    max_seq_len: int = 256,
+    tie_weights: bool = True,
+    use_turn_embed: bool = True,
+):
+    model = ChessDecoderPlayer(
+        tokenizer_path=tokenizer_path,
+        model_dim=model_dim,
+        mlp_ratio=mlp_ratio,
+        n_heads=n_heads,
+        n_layers=n_layers,
+        dropout=dropout,
+        max_seq_len=max_seq_len,
+        tie_weights=tie_weights,
+        use_turn_embed=use_turn_embed,
+    ).to(device)
+
+    state = torch.load(ckpt_path, map_location="cpu")
+    if isinstance(state, dict) and "state_dict" in state:
+        sd = state["state_dict"]
+    elif isinstance(state, dict) and "model" in state:
+        sd = state["model"]
+    else:
+        sd = state
+
+    missing, unexpected = model.load_state_dict(sd, strict=False)
+    if missing or unexpected:
+        print("[load_decoder] missing keys:", len(missing))
+        print("[load_decoder] unexpected keys:", len(unexpected))
+
+    model.eval()
+    return model
+
+
+
+def decoder_inputs_from_uci_prefix(decoder: ChessDecoderPlayer, uci_prefix: list[str], device: str, max_seq_len: int):
+    """
+    Builds (input_ids, piece_input_ids, attention_mask, start_turn) from move history.
+    - input_ids: BOS + move tokens
+    - piece_input_ids: BOS + piece tokens inferred by replaying moves
+    """
+    tok = decoder.decoder.tokenizer
+
+    # Build move token ids
+    move_ids = [tok.bos_id]
+    for u in uci_prefix:
+        move_ids.append(tok.move2id.get(u, tok.unk_id))
+
+    # Build piece token ids by replaying from startpos
+    piece_ids = [tok.p_bos_id]
+    board = chess.Board()
+    for u in uci_prefix:
+        try:
+            mv = chess.Move.from_uci(u)
+        except Exception:
+            piece_ids.append(tok.p_unk_id)
+            continue
+
+        piece = board.piece_at(mv.from_square)
+        if piece is None:
+            piece_ids.append(tok.p_unk_id)
+        else:
+            p = piece.symbol().upper()  # "P","N","B","R","Q","K"
+            piece_ids.append(tok.piece2id.get(p, tok.p_unk_id))
+
+        # push if legal; if illegal, stop (prefix should be legal but stay safe)
+        if mv in board.legal_moves:
+            board.push(mv)
+        else:
+            # still append something; break to keep alignment sane
+            break
+
+    # Keep last max_seq_len tokens (like training / inference)
+    move_ids = move_ids[-max_seq_len:]
+    piece_ids = piece_ids[-max_seq_len:]
+
+    input_ids = torch.tensor([move_ids], dtype=torch.long, device=device)         # [1,T]
+    piece_input_ids = torch.tensor([piece_ids], dtype=torch.long, device=device) # [1,T]
+    attention_mask = torch.ones_like(input_ids, dtype=torch.bool)                # [1,T]
+
+    # In your dataset, games start at white, so start_turn = 0 is correct.
+    # (And turn_emb parity then matches move index parity.)
+    start_turn = torch.tensor([0], dtype=torch.long, device=device)              # [1]
+
+    return input_ids, piece_input_ids, attention_mask, start_turn
+
+
+
+@torch.no_grad()
+def decoder_distribution_over_legal_moves(decoder: ChessDecoderPlayer, *, fen: str, uci_prefix: list[str], device: str, temperature: float = 1.0):
+    """
+    Returns dict {uci: prob} over legal moves, using decoder next-token distribution.
+    Only includes legal moves that exist in the tokenizer vocab.
+    """
+    tok = decoder.decoder.tokenizer
+
+    input_ids, piece_input_ids, attention_mask, start_turn = decoder_inputs_from_uci_prefix(
+        decoder, uci_prefix, device=device, max_seq_len=decoder.decoder.pos_enc.pe.size(1)  # max_seq_len passed in model
+        if hasattr(decoder.decoder, "pos_enc") else 256
+    )
+
+    out = decoder(
+        input_ids=input_ids,
+        piece_input_ids=piece_input_ids,
+        attention_mask=attention_mask,
+        start_turn=start_turn,
+    )
+    next_logits = out["logits"][:, -1, :]  # [1,V]
+    next_logits = next_logits / max(1e-6, float(temperature))
+
+    legal_mask = decoder.legal_token_mask_from_fen([fen], device=next_logits.device)  # [1,V]
+    next_logits = decoder.apply_token_mask(next_logits, legal_mask)                  # [1,V]
+
+    probs = torch.softmax(next_logits[0], dim=-1).detach().cpu()  # [V]
+
+    # Convert only legal moves in vocab → {uci: prob}
+    board = chess.Board(fen)
+    out_dict = {}
+    for mv in board.legal_moves:
+        uci = mv.uci()
+        tid = tok.move2id.get(uci, None)
+        if tid is None:
+            continue
+        out_dict[uci] = float(probs[tid].item())
+
+    return out_dict
+
+
 @torch.no_grad()
 def model_distribution_over_legal_moves(model, *, item, device: str, temperature: float = 1.0):
     """
@@ -149,46 +287,84 @@ def teacher_distribution_from_row(row, *, tau: float, mate_cp: int):
     return {u: float(p) for u, p in zip(uci_topk, probs)}
 
 
-def choose_union_moves(teacher_probs: dict, model_probs: dict, *, model_topk: int = 10):
-    """
-    union = teacher moves ∪ top model moves
-    Returned as a list of uci strings sorted by max(teacher,model) descending.
-    """
-    model_sorted = sorted(model_probs.items(), key=lambda kv: kv[1], reverse=True)
-    top_model = [u for u, _ in model_sorted[:model_topk]]
+# def choose_union_moves(teacher_probs: dict, model_probs: dict, *, model_topk: int = 10):
+#     """
+#     union = teacher moves ∪ top model moves
+#     Returned as a list of uci strings sorted by max(teacher,model) descending.
+#     """
+#     model_sorted = sorted(model_probs.items(), key=lambda kv: kv[1], reverse=True)
+#     top_model = [u for u, _ in model_sorted[:model_topk]]
 
-    union = set(teacher_probs.keys()) | set(top_model)
+#     union = set(teacher_probs.keys()) | set(top_model)
+
+#     def score(u):
+#         return max(teacher_probs.get(u, 0.0), model_probs.get(u, 0.0))
+
+#     ordered = sorted(list(union), key=score, reverse=True)
+#     return ordered
+
+
+
+def choose_union_moves_3(teacher_probs: dict, enc_probs: dict, dec_probs: dict, *, enc_topk: int = 10, dec_topk: int = 10):
+    enc_sorted = sorted(enc_probs.items(), key=lambda kv: kv[1], reverse=True)
+    dec_sorted = sorted(dec_probs.items(), key=lambda kv: kv[1], reverse=True)
+    top_enc = [u for u, _ in enc_sorted[:enc_topk]]
+    top_dec = [u for u, _ in dec_sorted[:dec_topk]]
+
+    union = set(teacher_probs.keys()) | set(top_enc) | set(top_dec)
 
     def score(u):
-        return max(teacher_probs.get(u, 0.0), model_probs.get(u, 0.0))
+        return max(teacher_probs.get(u, 0.0), enc_probs.get(u, 0.0), dec_probs.get(u, 0.0))
 
-    ordered = sorted(list(union), key=score, reverse=True)
-    return ordered
+    return sorted(list(union), key=score, reverse=True)
 
 
-def plot_one_position(*, idx: int, fen: str, moves: list, teacher_probs: dict, model_probs: dict, outpath: Path):
-    """
-    Makes a single figure (bar plot with two distributions).
-    """
+# def plot_one_position(*, idx: int, fen: str, moves: list, teacher_probs: dict, model_probs: dict, outpath: Path):
+#     """
+#     Makes a single figure (bar plot with two distributions).
+#     """
+#     t = np.array([teacher_probs.get(u, 0.0) for u in moves], dtype=np.float32)
+#     m = np.array([model_probs.get(u, 0.0) for u in moves], dtype=np.float32)
+
+#     x = np.arange(len(moves))
+#     w = 0.42
+
+#     plt.figure(figsize=(max(10, 0.6 * len(moves)), 5))
+#     plt.bar(x - w / 2, t, width=w, label="Teacher (tau-softmax on top-K)")
+#     plt.bar(x + w / 2, m, width=w, label="Model (softmax over legal moves)")
+
+#     plt.xticks(x, moves, rotation=45, ha="right", fontsize=9)
+#     plt.ylabel("Probability")
+#     plt.title(f"idx={idx} | {fen.split(' ')[0]} | turn={'w' if ' w ' in (' ' + fen + ' ') else 'b'}")
+#     plt.ylim(0.0, max(0.05, float(max(t.max(initial=0.0), m.max(initial=0.0))) * 1.15))
+#     plt.legend()
+#     plt.tight_layout()
+#     plt.savefig(outpath, dpi=180)
+#     plt.close()
+
+
+def plot_one_position(*, idx: int, fen: str, moves: list, teacher_probs: dict, enc_probs: dict, dec_probs: dict, outpath: Path):
     t = np.array([teacher_probs.get(u, 0.0) for u in moves], dtype=np.float32)
-    m = np.array([model_probs.get(u, 0.0) for u in moves], dtype=np.float32)
+    e = np.array([enc_probs.get(u, 0.0) for u in moves], dtype=np.float32)
+    d = np.array([dec_probs.get(u, 0.0) for u in moves], dtype=np.float32)
 
     x = np.arange(len(moves))
-    w = 0.42
+    w = 0.27
 
     plt.figure(figsize=(max(10, 0.6 * len(moves)), 5))
-    plt.bar(x - w / 2, t, width=w, label="Teacher (tau-softmax on top-K)")
-    plt.bar(x + w / 2, m, width=w, label="Model (softmax over legal moves)")
+    plt.bar(x - w, t, width=w, label="Teacher (tau-softmax on top-K)")
+    plt.bar(x,     e, width=w, label="Encoder (softmax over legal moves)")
+    plt.bar(x + w, d, width=w, label="Decoder (softmax over legal moves)")
 
     plt.xticks(x, moves, rotation=45, ha="right", fontsize=9)
     plt.ylabel("Probability")
-    plt.title(f"idx={idx} | {fen.split(' ')[0]} | turn={'w' if ' w ' in (' ' + fen + ' ') else 'b'}")
-    plt.ylim(0.0, max(0.05, float(max(t.max(initial=0.0), m.max(initial=0.0))) * 1.15))
+    plt.title(f"idx={idx} | {fen.split(' ')[0]} | stm={'w' if ' w ' in (' ' + fen + ' ') else 'b'}")
+    ymax = float(max(t.max(initial=0.0), e.max(initial=0.0), d.max(initial=0.0)))
+    plt.ylim(0.0, max(0.05, ymax * 1.15))
     plt.legend()
     plt.tight_layout()
     plt.savefig(outpath, dpi=180)
     plt.close()
-
 
 def main():
     ap = argparse.ArgumentParser()
@@ -200,6 +376,11 @@ def main():
     ap.add_argument("--outdir", type=str, default="distill_plots")
     ap.add_argument("--model_topk", type=int, default=10)
     ap.add_argument("--temperature", type=float, default=1.0, help="Extra temperature for model softmax (debug knob)")
+
+    ap.add_argument("--decoder_ckpt", type=str, default="checkpoints/chess_llm_decoder_v9.pt", help="Path to decoder checkpoint (.pt)")
+    ap.add_argument("--decoder_tokenizer_path", type=str, default="tokenizers/chess_uci_vocab.json", help="Path to decoder tokenizer json")
+    ap.add_argument("--decoder_topk", type=int, default=10)
+    ap.add_argument("--decoder_temperature", type=float, default=1.0)
     args = ap.parse_args()
 
     register_minimal_hydra_resolver()
@@ -228,6 +409,27 @@ def main():
     # Load model
     model = load_model_from_cfg(cfg, args.ckpt, args.device)
 
+    decoder = None
+    if args.decoder_ckpt is not None:
+        if args.decoder_tokenizer_path is None:
+            raise SystemExit("--decoder_tokenizer_path is required when --decoder_ckpt is set")
+
+        # If you want these to exactly match your training config, add CLI args for them.
+        decoder = load_decoder_model(
+            tokenizer_path=args.decoder_tokenizer_path,
+            ckpt_path=args.decoder_ckpt,
+            device=args.device,
+            # optionally expose these as CLI args:
+            model_dim=256,
+            mlp_ratio=4.0,
+            n_heads=4,
+            n_layers=6,
+            dropout=0.1,
+            max_seq_len=256,
+            tie_weights=True,
+            use_turn_embed=True,
+        )
+
     rng = np.random.default_rng(args.seed)
     n = min(int(args.n), len(ds))
     idxs = rng.choice(len(ds), size=n, replace=False).tolist()
@@ -245,22 +447,36 @@ def main():
         shard_id, local = index.locate(int(idx))
         row = readers[shard_id].get_by_index(int(local))
 
+
+        uci_prefix = json.loads(row["uci_prefix_json"])
+
         teacher_probs = teacher_distribution_from_row(row, tau=tau, mate_cp=mate_cp)
-        model_probs = model_distribution_over_legal_moves(
-            model, item=item, device=args.device, temperature=args.temperature
+        enc_probs = model_distribution_over_legal_moves(model, item=item, device=args.device, temperature=args.temperature)
+
+        dec_probs = {}
+        if decoder is not None:
+            dec_probs = decoder_distribution_over_legal_moves(
+                decoder,
+                fen=item["fen"],
+                uci_prefix=uci_prefix,
+                device=args.device,
+                temperature=args.decoder_temperature,
+            )
+
+        moves_union = choose_union_moves_3(
+            teacher_probs, enc_probs, dec_probs,
+            enc_topk=int(args.model_topk),
+            dec_topk=int(args.decoder_topk),
         )
 
-        union_moves = choose_union_moves(teacher_probs, model_probs, model_topk=int(args.model_topk))
-
-        fen = item["fen"]
         outpath = outdir / f"pos_{k:03d}_idx_{idx}.png"
-        print(row)
         plot_one_position(
             idx=int(idx),
-            fen=fen,
-            moves=union_moves,
+            fen=item["fen"],
+            moves=moves_union,
             teacher_probs=teacher_probs,
-            model_probs=model_probs,
+            enc_probs=enc_probs,
+            dec_probs=dec_probs,
             outpath=outpath,
         )
 
