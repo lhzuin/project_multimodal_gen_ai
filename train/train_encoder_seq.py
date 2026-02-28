@@ -331,8 +331,10 @@ class Trainer:
         for batch in self.val_loader:
             if batch_is_empty(batch):
                 continue
-
-            loss, correct, correct5, n = self._forward_loss_and_metrics(batch)
+            res = self._forward_loss_and_metrics(batch)
+            if res is None:
+                continue
+            loss, correct, correct5, n = res
             total_loss += float(loss.detach().cpu().item()) * n
             total_correct += correct
             total_correct5 += correct5

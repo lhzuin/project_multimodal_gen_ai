@@ -321,10 +321,12 @@ class ChessGameSampleDataset(Dataset):
             next_move_from = torch.tensor(-1, dtype=torch.long)
             next_move_to = torch.tensor(-1, dtype=torch.long)
             next_move_promo = torch.tensor(-1, dtype=torch.long)
+            
         
         board_check = chess.Board(board.fen())
         legal_pairs = {(m.from_square, m.to_square) for m in board_check.legal_moves}
         if (int(move_from.item()), int(move_to.item())) not in legal_pairs:
+            print("Warning: invalid move")
             return {"valid": False}
 
         out = {
@@ -467,11 +469,13 @@ class ChessGameSequenceDataset(Dataset):
 
         loaded = self._load_moves_for_game(game_list_idx)
         if loaded is None:
+            print("Warning: invalid move (parse failed)")
             return {"valid": False}
 
         start_fen, moves = loaded
         n = len(moves)
         if n <= 0:
+            print("Warning: invalid move (no moves in game)")
             return {"valid": False}
 
         # Choose a contiguous window
@@ -490,10 +494,10 @@ class ChessGameSequenceDataset(Dataset):
             for ply in range(start):
                 board.push(moves[ply])
         except AssertionError:
+            print("Warning: invalid move (push to start failed)")
             return {"valid": False}
 
         # Build sequence tensors
-        piece_probs_seq = []
         turn_seq = []
         castling_seq = []
         ep_seq = []
@@ -528,9 +532,13 @@ class ChessGameSequenceDataset(Dataset):
             for m in board.legal_moves:
                 legal[m.from_square * 64 + m.to_square] = True
             legal_flat_seq.append(legal)
+            
 
             # --- target move encoding ---
             fs, ts, pr = encode_move_from_board(board, mv)
+            if fs < 0 or ts < 0:
+                print("Warning: invalid move (encode failed)")
+                return {"valid": False}
             move_from_seq.append(torch.tensor(fs, dtype=torch.long))
             move_to_seq.append(torch.tensor(ts, dtype=torch.long))
             move_promo_seq.append(torch.tensor(pr, dtype=torch.long))
@@ -539,6 +547,7 @@ class ChessGameSequenceDataset(Dataset):
             try:
                 board.push(mv)
             except AssertionError:
+                print("Warning: invalid move (push failed)")
                 return {"valid": False}
 
         out = {
