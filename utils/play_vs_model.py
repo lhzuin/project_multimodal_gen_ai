@@ -123,21 +123,47 @@ def board_metadata(board: chess.Board, device):
 # ----------------------------
 # Decoder helpers
 # ----------------------------
-def history_to_input_ids(tok, moves_uci, device, max_len=256):
-    # We build: [BOS] + move tokens
-    ids = [tok.bos_id]
-    for u in moves_uci:
-        tid = tok.move2id.get(u, None)
-        if tid is None:
-            # If your tokenizer doesn't contain this move, you can skip or map to unk.
-            tid = tok.unk_id
-        ids.append(tid)
+def history_to_inputs(tok, moves_uci, base_fen: str, device, max_len=256):
+    move_full = [tok.bos_id]
+    piece_full = [tok.p_bos_id]
 
-    # Crop to last max_len tokens
-    ids = ids[-max_len:]
-    input_ids = torch.tensor([ids], device=device, dtype=torch.long)
+    tmp = chess.Board(fen=base_fen)
+
+    for u in moves_uci:
+        try:
+            mv = chess.Move.from_uci(u)
+        except ValueError:
+            break
+        if mv not in tmp.legal_moves:
+            break
+
+        moved_piece = tmp.piece_at(mv.from_square)
+        p = "P" if moved_piece is None else moved_piece.symbol().upper()
+
+        move_full.append(tok.move2id.get(u, tok.unk_id))
+        piece_full.append(tok.piece2id.get(p, tok.p_unk_id))
+
+        tmp.push(mv)
+
+    # training-style EOS
+    move_full.append(tok.eos_id)
+    piece_full.append(tok.p_eos_id)
+
+    full_len = len(move_full)
+    global_start = max(0, full_len - max_len)
+
+    move_win = move_full[global_start:]
+    piece_win = piece_full[global_start:]
+
+    # inference: remove trailing EOS so we predict next token
+    if len(move_win) > 0 and move_win[-1] == tok.eos_id:
+        move_win = move_win[:-1]
+        piece_win = piece_win[:-1]
+
+    input_ids = torch.tensor([move_win], device=device, dtype=torch.long)
+    piece_input_ids = torch.tensor([piece_win], device=device, dtype=torch.long)
     attn = torch.ones_like(input_ids, dtype=torch.long)
-    return input_ids, attn
+    return input_ids, piece_input_ids, attn, global_start
 
 
 # ----------------------------
@@ -152,7 +178,7 @@ def main():
     # decoder-specific
     ap.add_argument("--tokenizer_path", default=None, help="Needed for decoder (ChessLLM tokenizer)")
     ap.add_argument("--max_seq_len", type=int, default=256)
-    ap.add_argument("--n_layers", type=int, default=8)
+    ap.add_argument("--n_layers", type=int, default=12)
 
     # encoder-specific
     ap.add_argument("--img_size", type=int, default=256, help="Only used to construct ChessEncoderPlayer")
@@ -202,18 +228,27 @@ def main():
 
     # decoder history in UCI
     moves_uci = []
+    base_fen = chess.STARTING_FEN
 
     def model_move():
         fen = board.fen()
 
         if args.model_type == "decoder":
-            input_ids, piece_input_ids, attn = history_to_inputs(tok, moves_uci, device, max_len=args.max_seq_len)
+            input_ids, piece_input_ids, attn, global_start = history_to_inputs(
+                tok, moves_uci, base_fen, device, max_len=args.max_seq_len
+            )
+
+            ply_before = max(0, global_start - 1)
+            base_turn = chess.Board(base_fen).turn
+            base_turn_idx = 0 if base_turn == chess.WHITE else 1
+            start_turn = torch.tensor([(base_turn_idx + ply_before) % 2], device=device, dtype=torch.long)
+
             mv = model.sample_moves(
                 input_ids=input_ids,
-                piece_input_ids=piece_input_ids,   # <-- add
+                piece_input_ids=piece_input_ids,
                 attention_mask=attn,
                 fen_list=[fen],
-                start_turn=torch.tensor([0], device=device),  # game starts at white
+                start_turn=start_turn,
                 temperature=args.temperature,
                 topk=(args.topk if args.topk > 0 else None),
                 greedy=args.greedy,

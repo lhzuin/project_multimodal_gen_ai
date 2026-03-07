@@ -24,12 +24,6 @@ PIECE2IDX = {
     chess.Piece(chess.KING, chess.BLACK): 12,
 }
 
-# def board_to_piece_probs(board: chess.Board, device):
-#     x = torch.zeros((1, 64, 13), dtype=torch.float32, device=device)
-#     for sq in chess.SQUARES:
-#         p = board.piece_at(sq)
-#         x[0, sq, PIECE2IDX.get(p, 0)] = 1.0
-#     return x
 
 def board_metadata(board: chess.Board, device): # Encoder only. Obs: white color=1 (different from decoder's turn encoding)
     turn = torch.tensor([1 if board.turn == chess.WHITE else 0], device=device)
@@ -101,28 +95,50 @@ def main():
         player.eval().to(device)
         tok = player.decoder.tokenizer
 
-        def history_to_inputs(moves_uci):
-            ids = [tok.bos_id]
-            piece_ids = [tok.bos_id]
+        def history_to_inputs(moves_uci, base_fen: str):
+            # We build the SAME logical stream as training:
+            #   [BOS] + move_tokens + [EOS]
+            move_full = [tok.bos_id]
+            piece_full = [tok.p_bos_id]
 
-            tmp = chess.Board()
+            tmp = chess.Board(fen=base_fen)
+
             for u in moves_uci:
-                mv = chess.Move.from_uci(u)
+                try:
+                    mv = chess.Move.from_uci(u)
+                except ValueError:
+                    break
+                if mv not in tmp.legal_moves:
+                    break
 
                 moved_piece = tmp.piece_at(mv.from_square)
-                p = "P" if moved_piece is None else moved_piece.symbol().upper()  # 'P','N',...
-                piece_ids.append(tok.piece2id.get(p, tok.unk_id))
+                p = "P" if moved_piece is None else moved_piece.symbol().upper()
 
-                ids.append(tok.move2id.get(u, tok.unk_id))
+                move_full.append(tok.move2id.get(u, tok.unk_id))
+                piece_full.append(tok.piece2id.get(p, tok.p_unk_id))
+
                 tmp.push(mv)
 
-            ids = ids[-args.max_seq_len:]
-            piece_ids = piece_ids[-args.max_seq_len:]
+            # add EOS (training does this)
+            move_full.append(tok.eos_id)
+            piece_full.append(tok.p_eos_id)
 
-            input_ids = torch.tensor([ids], device=device, dtype=torch.long)
-            piece_input_ids = torch.tensor([piece_ids], device=device, dtype=torch.long)
+            full_len = len(move_full)
+            global_start = max(0, full_len - args.max_seq_len)
+
+            # take last max_seq_len tokens (training-style crop from left)
+            move_win = move_full[global_start:]
+            piece_win = piece_full[global_start:]
+
+            # for inference, remove trailing EOS so we predict the next move token
+            if len(move_win) > 0 and move_win[-1] == tok.eos_id:
+                move_win = move_win[:-1]
+                piece_win = piece_win[:-1]
+
+            input_ids = torch.tensor([move_win], device=device, dtype=torch.long)
+            piece_input_ids = torch.tensor([piece_win], device=device, dtype=torch.long)
             attn = torch.ones_like(input_ids, dtype=torch.long)
-            return input_ids, piece_input_ids, attn
+            return input_ids, piece_input_ids, attn, global_start
 
     else:
         player = ChessEncoderPlayer(img_size=256, vit_path=None, freeze_vit=True)
@@ -132,16 +148,19 @@ def main():
     # UCI state
     board = chess.Board()
     moves_uci = []
+    base_fen = chess.STARTING_FEN
 
     def set_position(tokens):
-        nonlocal board, moves_uci
-        moves_uci = []
+        nonlocal board, moves_uci, base_fen
+        moves_uci = []  
 
         if tokens[1] == "startpos":
             board = chess.Board()
             idx = 2
+            base_fen = chess.STARTING_FEN
         elif tokens[1] == "fen":
             fen = " ".join(tokens[2:8])
+            base_fen = fen
             board = chess.Board(fen=fen)
             idx = 8
         else:
@@ -160,13 +179,20 @@ def main():
         fen = board.fen()
 
         if args.model_type == "decoder":
-            input_ids, piece_input_ids, attn = history_to_inputs(moves_uci)
+            input_ids, piece_input_ids, attn, global_start = history_to_inputs(moves_uci, base_fen)
+            # match PGNMoveDataset logic:
+            ply_before = max(0, global_start - 1)
+
+            base_turn = chess.Board(base_fen).turn
+            base_turn_idx = 0 if base_turn == chess.WHITE else 1  # your convention
+            start_turn = torch.tensor([(base_turn_idx + ply_before) % 2], device=device, dtype=torch.long)
+
             mv = player.sample_moves(
                 input_ids=input_ids,
                 piece_input_ids=piece_input_ids,
                 attention_mask=attn,
                 fen_list=[fen],
-                start_turn=torch.tensor([0], device=device),  # game starts at white
+                start_turn=start_turn,
                 temperature=args.temperature,
                 topk=(args.topk if args.topk > 0 else None),
                 greedy=args.greedy,
@@ -211,6 +237,7 @@ def main():
         elif tokens[0] == "ucinewgame":
             board = chess.Board()
             moves_uci = []
+            base_fen = chess.STARTING_FEN
 
         elif tokens[0] == "position":
             set_position(tokens)

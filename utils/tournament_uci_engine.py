@@ -136,10 +136,11 @@ def main():
         tok = player.decoder.tokenizer
 
         def history_to_inputs(moves_uci, base_fen: str):
-            ids = [tok.bos_id]
-            piece_ids = [tok.bos_id]
+            # We build the SAME logical stream as training:
+            #   [BOS] + move_tokens + [EOS]
+            move_full = [tok.bos_id]
+            piece_full = [tok.p_bos_id]
 
-            # IMPORTANT: replay from base_fen, not always from startpos
             tmp = chess.Board(fen=base_fen)
 
             for u in moves_uci:
@@ -147,26 +148,37 @@ def main():
                     mv = chess.Move.from_uci(u)
                 except ValueError:
                     break
-
-                # If not pseudo-legal from tmp, stop replaying (avoid crash)
                 if mv not in tmp.legal_moves:
                     break
 
                 moved_piece = tmp.piece_at(mv.from_square)
                 p = "P" if moved_piece is None else moved_piece.symbol().upper()
-                piece_ids.append(tok.piece2id.get(p, tok.unk_id))
 
-                ids.append(tok.move2id.get(u, tok.unk_id))
+                move_full.append(tok.move2id.get(u, tok.unk_id))
+                piece_full.append(tok.piece2id.get(p, tok.p_unk_id))
+
                 tmp.push(mv)
 
-            # truncate
-            ids = ids[-args.max_seq_len:]
-            piece_ids = piece_ids[-args.max_seq_len:]
+            # add EOS (training does this)
+            move_full.append(tok.eos_id)
+            piece_full.append(tok.p_eos_id)
 
-            input_ids = torch.tensor([ids], device=device, dtype=torch.long)
-            piece_input_ids = torch.tensor([piece_ids], device=device, dtype=torch.long)
+            full_len = len(move_full)
+            global_start = max(0, full_len - args.max_seq_len)
+
+            # take last max_seq_len tokens (training-style crop from left)
+            move_win = move_full[global_start:]
+            piece_win = piece_full[global_start:]
+
+            # for inference, remove trailing EOS so we predict the next move token
+            if len(move_win) > 0 and move_win[-1] == tok.eos_id:
+                move_win = move_win[:-1]
+                piece_win = piece_win[:-1]
+
+            input_ids = torch.tensor([move_win], device=device, dtype=torch.long)
+            piece_input_ids = torch.tensor([piece_win], device=device, dtype=torch.long)
             attn = torch.ones_like(input_ids, dtype=torch.long)
-            return input_ids, piece_input_ids, attn
+            return input_ids, piece_input_ids, attn, global_start
 
     else:
         player = ChessEncoderPlayer(
@@ -233,14 +245,14 @@ def main():
         fen = board.fen()
 
         if args.model_type == "decoder":
-            input_ids, piece_input_ids, attn = history_to_inputs(moves_uci, base_fen)
+            input_ids, piece_input_ids, attn, global_start = history_to_inputs(moves_uci, base_fen)
+
+            # match PGNMoveDataset logic:
+            ply_before = max(0, global_start - 1)
 
             base_turn = chess.Board(base_fen).turn
-            start_turn = torch.tensor(
-                [0],
-                device=device,
-                dtype=torch.long,
-            )
+            base_turn_idx = 0 if base_turn == chess.WHITE else 1  # your convention
+            start_turn = torch.tensor([(base_turn_idx + ply_before) % 2], device=device, dtype=torch.long)
 
             mv = player.sample_moves(
                 input_ids=input_ids,
