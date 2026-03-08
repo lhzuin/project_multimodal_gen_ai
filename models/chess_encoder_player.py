@@ -443,6 +443,7 @@ class ChessEncoderPlayerV2(nn.Module):
         *,
         images=None,
         piece_probs=None,
+        labels64=None,
         piece_logits=None,
         turn=None,
         castling=None,
@@ -459,6 +460,7 @@ class ChessEncoderPlayerV2(nn.Module):
         """
         out = self.forward(
             images=images,
+            labels64=labels64,
             piece_probs=piece_probs,
             piece_logits=piece_logits,
             turn=turn,

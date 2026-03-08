@@ -175,6 +175,9 @@ def launch_model_uci_engine(args) -> chess.engine.SimpleEngine:
            "--topk", str(args.topk)]
     if args.greedy:
         cmd.append("--greedy")
+    
+    if args.model_type == "encoder":
+        cmd += ["--version", str(args.version)]
 
     if args.model_type == "decoder":
         if not args.tokenizer_path:
@@ -679,6 +682,7 @@ def run_tournament(args) -> Tuple[TournamentSummary, List[PlayedGame]]:
             "n_layers": args.n_layers,
             "img_size": args.img_size,
             "vit_path": args.vit_path,
+            "version": args.version,
         },
     )
 
@@ -724,6 +728,7 @@ def main():
     # Encoder-only
     ap.add_argument("--img_size", type=int, default=256)
     ap.add_argument("--vit_path", default=None)
+    ap.add_argument("--version", type=int, default=2, help="Model version (1 or 2) for encoder; ignored for decoder.")
 
     # Output
     ap.add_argument("--out_dir", default="tournament_out")

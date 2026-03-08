@@ -32,6 +32,7 @@ import torch
 
 from models.chess_decoder_player import ChessDecoderPlayer
 from models.chess_encoder_player import ChessEncoderPlayer
+from models.chess_encoder_player import ChessEncoderPlayerV2
 
 
 # --- encoder helpers (perfect state -> piece_probs) ---
@@ -57,6 +58,15 @@ def flip_rank_square(sq: int) -> int:
     rank = sq // 8
     flipped_rank = 7 - rank
     return flipped_rank * 8 + file
+
+def board_to_labels64(board: chess.Board, device) -> torch.Tensor:
+    labels = torch.zeros((1, 64), dtype=torch.long, device=device)
+    for sq in chess.SQUARES:
+        p = board.piece_at(sq)
+        idx = PIECE2IDX.get(p, 0)
+        ds_idx = flip_rank_square(sq)   # keep consistent with your dataset indexing
+        labels[0, ds_idx] = idx
+    return labels   
 
 def board_to_piece_probs(board: chess.Board, device) -> torch.Tensor:
     x = torch.zeros((1, 64, 13), dtype=torch.float32, device=device)
@@ -109,6 +119,7 @@ def main():
     ap.add_argument("--topk", type=int, default=20)
     ap.add_argument("--greedy", action="store_true")
     ap.add_argument("--n_layers", type=int, default=8)
+    ap.add_argument("--version", type=int, default=2)
 
     # encoder
     ap.add_argument("--img_size", type=int, default=256)
@@ -117,6 +128,7 @@ def main():
 
     args = ap.parse_args()
     device = torch.device(args.device)
+    version = args.version
 
     sd = load_state_dict_any(args.ckpt)
     sd = strip_prefix(sd, "module.")
@@ -181,14 +193,32 @@ def main():
             return input_ids, piece_input_ids, attn, global_start
 
     else:
-        player = ChessEncoderPlayer(
-            img_size=args.img_size,
-            vit_path=args.vit_path,
-            freeze_vit=args.freeze_vit,
-        )
-        # encoder checkpoints may not match vit keys depending on training; keep strict=False
-        player.load_state_dict(sd, strict=False)
-        player.eval().to(device)
+        if version == 1:
+            player = ChessEncoderPlayer(
+                img_size=args.img_size,
+                vit_path=args.vit_path,
+                freeze_vit=args.freeze_vit,
+                n_layers=args.n_layers
+            )
+
+            player.load_state_dict(sd, strict=False)
+            player.eval().to(device)
+        
+        if version == 2:
+            player = ChessEncoderPlayerV2(
+                img_size=args.img_size,
+                encoder_dim=256,
+                n_heads=4,
+                n_layers=8,
+                encoder_dropout=0.1,
+                ep_embed_dim=16,
+                piece_embed_dim=32,
+                vit_path=args.vit_path,
+                freeze_vit=args.freeze_vit,
+            )
+
+            player.load_state_dict(sd, strict=True) 
+            player.eval().to(device)
 
     # ----------------------------
     # UCI state
@@ -265,18 +295,36 @@ def main():
                 greedy=args.greedy,
             )[0]
         else:
+
+            labels64 = board_to_labels64(board, device)
             piece_probs = board_to_piece_probs(board, device)
             turn, castling, ep_square = board_metadata(board, device)
-            mv = player.sample_moves(
-                piece_probs=piece_probs,
-                turn=turn,
-                castling=castling,
-                ep_square=ep_square,
-                fen=[fen],
-                temperature=args.temperature,
-                topk=(args.topk if args.topk > 0 else None),
-                greedy=args.greedy,
-            )[0]
+
+            if args.version == 1:
+                mv = player.sample_moves(
+                    piece_probs=piece_probs,
+                    #labels64=labels64,
+                    turn=turn,
+                    castling=castling,
+                    ep_square=ep_square,
+                    fen=[fen],
+                    temperature=args.temperature,
+                    topk=(args.topk if args.topk > 0 else None),
+                    greedy=args.greedy,
+                )[0]
+            
+            if args.version == 2:
+                mv = player.sample_moves(
+                    #piece_probs=piece_probs,
+                    labels64=labels64,
+                    turn=turn,
+                    castling=castling,
+                    ep_square=ep_square,
+                    fen=[fen],
+                    temperature=args.temperature,
+                    topk=(args.topk if args.topk > 0 else None),
+                    greedy=args.greedy,
+                )[0]
 
         if mv not in board.legal_moves:
             # safety fallback
