@@ -1,32 +1,18 @@
 #!/usr/bin/env python3
 """
-Plot teacher vs model policy distributions on random positions from the distillation DB.
+Plot teacher vs encoder vs decoder policy distributions for one specific position,
+keeping only the first 5 moves from the original ordered union.
 
-For each sampled position:
-  1) Teacher distribution: softmax(cp/mate scores with tau) over the stored top-K moves.
-  2) Model distribution: softmax over legal moves using encoder's (from,to) logits (+ promo logits factor).
+This version is specialized for:
+    idx = 623762
 
-Then we plot both distributions on the union:
-  union = teacher_topK ∪ model_top10
-
-Usage example:
-  python plot_distill_encoder_distributions.py \
-    --cfg distillation_encoder_v3.yaml \
-    --ckpt checkpoints/distill_encoder_v3_mixed.pt \
-    --n 12 \
-    --outdir debug_plots \
-    --device cuda
-
-Notes:
-- This script imports "private" helpers from distillation_db.py (_MultiShardIndex, _scores_to_probs).
-  That’s deliberate to reuse your infrastructure with minimal duplication.
-- You may need to adjust imports depending on your repo layout (models.* vs local files).
+Output:
+    pos_004_idx_623762_top5.png
 """
 
 from omegaconf import OmegaConf
 import os
 import json
-import math
 import argparse
 from pathlib import Path
 
@@ -35,10 +21,13 @@ import torch
 import matplotlib.pyplot as plt
 import chess
 
-from omegaconf import OmegaConf
-
-# ---- repo-local imports (adjust if needed) ----
-from dataset.distillation_db import DistillationEncoderDataset, DistillationShardReader, _MultiShardIndex, _scores_to_probs
+# ---- repo-local imports ----
+from dataset.distillation_db import (
+    DistillationEncoderDataset,
+    DistillationShardReader,
+    _MultiShardIndex,
+    _scores_to_probs,
+)
 from models.chess_encoder_player import ChessEncoderPlayerV2
 from models.chess_decoder_player import ChessDecoderPlayer
 
@@ -52,14 +41,7 @@ PROMO_TO_CLASS = {
 }
 
 
-def flip_rank_square(sq: int) -> int:
-    file = sq % 8
-    rank = sq // 8
-    flipped_rank = 7 - rank
-    return flipped_rank * 8 + file
-
 def register_minimal_hydra_resolver():
-    # Only supports ${hydra:runtime.cwd}
     if not OmegaConf.has_resolver("hydra"):
         def _hydra_resolver(key: str):
             if key == "runtime.cwd":
@@ -67,11 +49,8 @@ def register_minimal_hydra_resolver():
             raise ValueError(f"Unsupported hydra interpolation: {key}")
         OmegaConf.register_new_resolver("hydra", _hydra_resolver)
 
+
 def load_model_from_cfg(cfg, ckpt_path: str, device: str):
-    """
-    Builds ChessEncoderPlayerV2 from cfg.model.instance fields and loads checkpoint.
-    Works whether ckpt is a full model state_dict or a dict containing "model".
-    """
     mcfg = cfg.model.instance
 
     model = ChessEncoderPlayerV2(
@@ -97,6 +76,7 @@ def load_model_from_cfg(cfg, ckpt_path: str, device: str):
     if missing or unexpected:
         print("[load_model] missing keys:", len(missing))
         print("[load_model] unexpected keys:", len(unexpected))
+
     model.eval()
     return model
 
@@ -144,7 +124,6 @@ def load_decoder_model(
     return model
 
 
-
 def decoder_inputs_from_uci_prefix(
     decoder: ChessDecoderPlayer,
     uci_prefix: list[str],
@@ -153,14 +132,6 @@ def decoder_inputs_from_uci_prefix(
     device: str,
     max_seq_len: int,
 ):
-    """
-    Build decoder inputs exactly like the working tournament code:
-      - replay from base_fen
-      - build [BOS] + moves + [EOS]
-      - crop from the left to max_seq_len
-      - remove trailing EOS for next-move prediction
-      - return global_start so start_turn can be aligned correctly
-    """
     tok = decoder.decoder.tokenizer
 
     move_full = [tok.bos_id]
@@ -185,18 +156,15 @@ def decoder_inputs_from_uci_prefix(
 
         tmp.push(mv)
 
-    # add EOS like training
     move_full.append(tok.eos_id)
     piece_full.append(tok.p_eos_id)
 
     full_len = len(move_full)
     global_start = max(0, full_len - max_seq_len)
 
-    # crop from left exactly like training/inference
     move_win = move_full[global_start:]
     piece_win = piece_full[global_start:]
 
-    # remove trailing EOS so model predicts next move token
     if len(move_win) > 0 and move_win[-1] == tok.eos_id:
         move_win = move_win[:-1]
         piece_win = piece_win[:-1]
@@ -206,7 +174,6 @@ def decoder_inputs_from_uci_prefix(
     attention_mask = torch.ones_like(input_ids, dtype=torch.bool)
 
     return input_ids, piece_input_ids, attention_mask, global_start
-
 
 
 @torch.no_grad()
@@ -225,8 +192,6 @@ def decoder_distribution_over_legal_moves(
         if hasattr(decoder.decoder, "pos_enc") else 256
     )
 
-    # IMPORTANT: your current rollback code is invalid because Board(fen)
-    # has an empty move_stack. For these PGN-based games, use startpos.
     base_fen = chess.STARTING_FEN
 
     input_ids, piece_input_ids, attention_mask, global_start = decoder_inputs_from_uci_prefix(
@@ -237,7 +202,6 @@ def decoder_distribution_over_legal_moves(
         max_seq_len=max_seq_len,
     )
 
-    # Same parity logic as tournament code
     ply_before = max(0, global_start - 1)
 
     base_turn = chess.Board(base_fen).turn
@@ -336,112 +300,131 @@ def model_distribution_over_legal_moves(model, *, item, device: str, temperature
 
 
 def teacher_distribution_from_row(row, *, tau: float, mate_cp: int):
-    """
-    Returns dict {uci: prob} over the stored top-K teacher moves for this position.
-    """
     uci_topk = json.loads(row["uci_topk_json"])
     cp_topk = json.loads(row["cp_topk_json"])
     mate_topk = json.loads(row["mate_topk_json"])
 
-    # _scores_to_probs already does cp/mate handling + temperature.
-    probs = _scores_to_probs(cp_topk, mate_topk, tau=float(tau), mate_cp=int(mate_cp)).cpu().numpy()
+    probs = _scores_to_probs(
+        cp_topk,
+        mate_topk,
+        tau=float(tau),
+        mate_cp=int(mate_cp),
+    ).cpu().numpy()
+
     return {u: float(p) for u, p in zip(uci_topk, probs)}
 
 
-# def choose_union_moves(teacher_probs: dict, model_probs: dict, *, model_topk: int = 10):
-#     """
-#     union = teacher moves ∪ top model moves
-#     Returned as a list of uci strings sorted by max(teacher,model) descending.
-#     """
-#     model_sorted = sorted(model_probs.items(), key=lambda kv: kv[1], reverse=True)
-#     top_model = [u for u, _ in model_sorted[:model_topk]]
-
-#     union = set(teacher_probs.keys()) | set(top_model)
-
-#     def score(u):
-#         return max(teacher_probs.get(u, 0.0), model_probs.get(u, 0.0))
-
-#     ordered = sorted(list(union), key=score, reverse=True)
-#     return ordered
-
-
-
-def choose_union_moves_3(teacher_probs: dict, enc_probs: dict, dec_probs: dict, *, enc_topk: int = 10, dec_topk: int = 10):
+def choose_union_moves_3(
+    teacher_probs: dict,
+    enc_probs: dict,
+    dec_probs: dict,
+    *,
+    enc_topk: int = 10,
+    dec_topk: int = 10,
+):
     enc_sorted = sorted(enc_probs.items(), key=lambda kv: kv[1], reverse=True)
     dec_sorted = sorted(dec_probs.items(), key=lambda kv: kv[1], reverse=True)
+
     top_enc = [u for u, _ in enc_sorted[:enc_topk]]
     top_dec = [u for u, _ in dec_sorted[:dec_topk]]
 
     union = set(teacher_probs.keys()) | set(top_enc) | set(top_dec)
 
     def score(u):
-        return max(teacher_probs.get(u, 0.0), enc_probs.get(u, 0.0), dec_probs.get(u, 0.0))
+        return max(
+            teacher_probs.get(u, 0.0),
+            enc_probs.get(u, 0.0),
+            dec_probs.get(u, 0.0),
+        )
 
     return sorted(list(union), key=score, reverse=True)
 
 
-# def plot_one_position(*, idx: int, fen: str, moves: list, teacher_probs: dict, model_probs: dict, outpath: Path):
-#     """
-#     Makes a single figure (bar plot with two distributions).
-#     """
+# def plot_one_position(
+#     *,
+#     idx: int,
+#     fen: str,
+#     moves: list[str],
+#     teacher_probs: dict,
+#     enc_probs: dict,
+#     dec_probs: dict,
+#     outpath: Path,
+# ):
 #     t = np.array([teacher_probs.get(u, 0.0) for u in moves], dtype=np.float32)
-#     m = np.array([model_probs.get(u, 0.0) for u in moves], dtype=np.float32)
+#     e = np.array([enc_probs.get(u, 0.0) for u in moves], dtype=np.float32)
+#     d = np.array([dec_probs.get(u, 0.0) for u in moves], dtype=np.float32)
 
 #     x = np.arange(len(moves))
-#     w = 0.42
+#     w = 0.25
 
-#     plt.figure(figsize=(max(10, 0.6 * len(moves)), 5))
-#     plt.bar(x - w / 2, t, width=w, label="Teacher (tau-softmax on top-K)")
-#     plt.bar(x + w / 2, m, width=w, label="Model (softmax over legal moves)")
+#     plt.figure(figsize=(8, 5))
+#     plt.bar(x - w, t, width=w, label="Teacher")
+#     plt.bar(x,     e, width=w, label="Encoder")
+#     plt.bar(x + w, d, width=w, label="Decoder")
 
-#     plt.xticks(x, moves, rotation=45, ha="right", fontsize=9)
+#     plt.xticks(x, moves, rotation=35, ha="right", fontsize=10)
 #     plt.ylabel("Probability")
-#     plt.title(f"idx={idx} | {fen.split(' ')[0]} | turn={'w' if ' w ' in (' ' + fen + ' ') else 'b'}")
-#     plt.ylim(0.0, max(0.05, float(max(t.max(initial=0.0), m.max(initial=0.0))) * 1.15))
+#     plt.title("Probability Distribution Comparison")
+#     ymax = float(max(t.max(initial=0.0), e.max(initial=0.0), d.max(initial=0.0)))
+#     plt.ylim(0.0, max(0.05, ymax * 1.15))
 #     plt.legend()
 #     plt.tight_layout()
 #     plt.savefig(outpath, dpi=180)
 #     plt.close()
 
-
-def plot_one_position(*, idx: int, fen: str, moves: list, teacher_probs: dict, enc_probs: dict, dec_probs: dict, outpath: Path):
+def plot_one_position(
+    *,
+    idx: int,
+    fen: str,
+    moves: list[str],
+    teacher_probs: dict,
+    enc_probs: dict,
+    dec_probs: dict,
+    outpath: Path,
+):
     t = np.array([teacher_probs.get(u, 0.0) for u in moves], dtype=np.float32)
     e = np.array([enc_probs.get(u, 0.0) for u in moves], dtype=np.float32)
     d = np.array([dec_probs.get(u, 0.0) for u in moves], dtype=np.float32)
 
     x = np.arange(len(moves))
-    w = 0.27
+    w = 0.25
 
-    plt.figure(figsize=(max(10, 0.6 * len(moves)), 5))
-    plt.bar(x - w, t, width=w, label="Teacher (tau-softmax on top-K)")
-    plt.bar(x,     e, width=w, label="Encoder (softmax over legal moves)")
-    plt.bar(x + w, d, width=w, label="Decoder (softmax over legal moves)")
+    plt.figure(figsize=(9, 5.8))
+    plt.bar(x - w, t, width=w, label="Teacher")
+    plt.bar(x,     e, width=w, label="Encoder")
+    plt.bar(x + w, d, width=w, label="Decoder")
 
-    plt.xticks(x, moves, rotation=45, ha="right", fontsize=9)
-    plt.ylabel("Probability")
-    plt.title(f"idx={idx} | {fen.split(' ')[0]} | stm={'w' if ' w ' in (' ' + fen + ' ') else 'b'}")
+    plt.xticks(x, moves, rotation=35, ha="right", fontsize=13)
+    plt.yticks(fontsize=13)
+    plt.ylabel("Probability", fontsize=15)
+    plt.title(
+        "Probability Distribution Comparison",
+        fontsize=18,
+        fontweight="bold",
+        pad=14,
+    )
+
     ymax = float(max(t.max(initial=0.0), e.max(initial=0.0), d.max(initial=0.0)))
     plt.ylim(0.0, max(0.05, ymax * 1.15))
-    plt.legend()
+
+    plt.legend(fontsize=13)
     plt.tight_layout()
     plt.savefig(outpath, dpi=180)
     plt.close()
+
 
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--cfg", type=str, default="configs/distillation_encoder_v9.yaml")
     ap.add_argument("--cfg_encoder", type=str, default="configs/chess_encoder_seq_v1.yaml")
-    ap.add_argument("--ckpt", type=str, default="checkpoints/chess_encoder_player_v3.pt", help="Path to encoder checkpoint (.pt)")
-    ap.add_argument("--n", type=int, default=12, help="Number of random positions to plot")
-    ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--ckpt", type=str, default="checkpoints/chess_encoder_player_v3.pt")
+    ap.add_argument("--decoder_ckpt", type=str, default="checkpoints/chess_llm_decoder_v9.pt")
+    ap.add_argument("--decoder_tokenizer_path", type=str, default="tokenizers/chess_uci_vocab.json")
     ap.add_argument("--device", type=str, default="cpu", choices=["cpu", "cuda", "mps"])
     ap.add_argument("--outdir", type=str, default="distill_plots")
     ap.add_argument("--model_topk", type=int, default=10)
-    ap.add_argument("--temperature", type=float, default=1.0, help="Extra temperature for model softmax (debug knob)")
-
-    ap.add_argument("--decoder_ckpt", type=str, default="checkpoints/chess_llm_decoder_v9.pt", help="Path to decoder checkpoint (.pt)")
-    ap.add_argument("--decoder_tokenizer_path", type=str, default="tokenizers/chess_uci_vocab.json", help="Path to decoder tokenizer json")
     ap.add_argument("--decoder_topk", type=int, default=10)
+    ap.add_argument("--temperature", type=float, default=1.0)
     ap.add_argument("--decoder_temperature", type=float, default=1.0)
     args = ap.parse_args()
 
@@ -456,7 +439,6 @@ def main():
     outdir = Path(args.outdir)
     outdir.mkdir(parents=True, exist_ok=True)
 
-    # Dataset gives us fen + state tensors (piece_probs/turn/castling/ep_square)
     ds = DistillationEncoderDataset(
         meta_path=meta_path,
         tau=tau,
@@ -465,85 +447,78 @@ def main():
         return_state_tensors=True,
     )
 
-    # To get teacher UCI strings + cp/mate, reuse the shard readers directly
     index = _MultiShardIndex(meta_path)
     readers = [DistillationShardReader(p) for (p, _) in index.shards]
 
-    # Load model
     model = load_model_from_cfg(cfg_encoder, args.ckpt, args.device)
 
-    decoder = None
-    if args.decoder_ckpt is not None:
-        if args.decoder_tokenizer_path is None:
-            raise SystemExit("--decoder_tokenizer_path is required when --decoder_ckpt is set")
+    decoder = load_decoder_model(
+        tokenizer_path=args.decoder_tokenizer_path,
+        ckpt_path=args.decoder_ckpt,
+        device=args.device,
+        model_dim=256,
+        mlp_ratio=4.0,
+        n_heads=4,
+        n_layers=12,
+        dropout=0.1,
+        max_seq_len=256,
+        tie_weights=True,
+        use_turn_embed=True,
+    )
 
-        # If you want these to exactly match your training config, add CLI args for them.
-        decoder = load_decoder_model(
-            tokenizer_path=args.decoder_tokenizer_path,
-            ckpt_path=args.decoder_ckpt,
-            device=args.device,
-            # optionally expose these as CLI args:
-            model_dim=256,
-            mlp_ratio=4.0,
-            n_heads=4,
-            n_layers=12,
-            dropout=0.1,
-            max_seq_len=256,
-            tie_weights=True,
-            use_turn_embed=True,
-        )
+    # Specific case only
+    idx = 623762
+    item = ds[idx]
+    if not item.get("valid", False):
+        raise RuntimeError(f"Item idx={idx} is not valid.")
 
-    rng = np.random.default_rng(args.seed)
-    n = min(int(args.n), len(ds))
-    idxs = rng.choice(len(ds), size=n, replace=False).tolist()
+    shard_id, local = index.locate(int(idx))
+    row = readers[shard_id].get_by_index(int(local))
+    uci_prefix = json.loads(row["uci_prefix_json"])
 
-    print(f"[info] meta_path={meta_path}")
-    print(f"[info] tau={tau}, mate_cp={mate_cp}")
-    print(f"[info] plotting n={n} positions into {outdir.resolve()}")
+    teacher_probs = teacher_distribution_from_row(row, tau=tau, mate_cp=mate_cp)
+    enc_probs = model_distribution_over_legal_moves(
+        model,
+        item=item,
+        device=args.device,
+        temperature=args.temperature,
+    )
+    dec_probs = decoder_distribution_over_legal_moves(
+        decoder,
+        fen=item["fen"],
+        uci_prefix=uci_prefix,
+        device=args.device,
+        temperature=args.decoder_temperature,
+    )
 
-    for k, idx in enumerate(idxs):
-        item = ds[idx]
-        if not item.get("valid", False):
-            continue
+    # Build the same ordered union logic as before
+    moves_union = choose_union_moves_3(
+        teacher_probs,
+        enc_probs,
+        dec_probs,
+        enc_topk=int(args.model_topk),
+        dec_topk=int(args.decoder_topk),
+    )
 
-        # fetch raw DB row for this idx to get uci_topk/cp/mate
-        shard_id, local = index.locate(int(idx))
-        row = readers[shard_id].get_by_index(int(local))
+    # Keep only the first 5 moves that appear in the original ordering
+    moves_top5 = moves_union[:5]
 
+    print("[info] idx =", idx)
+    print("[info] FEN =", item["fen"])
+    print("[info] top-5 moves =", moves_top5)
 
-        uci_prefix = json.loads(row["uci_prefix_json"])
+    outpath = outdir / "pos_004_idx_623762_top5.png"
+    plot_one_position(
+        idx=idx,
+        fen=item["fen"],
+        moves=moves_top5,
+        teacher_probs=teacher_probs,
+        enc_probs=enc_probs,
+        dec_probs=dec_probs,
+        outpath=outpath,
+    )
 
-        teacher_probs = teacher_distribution_from_row(row, tau=tau, mate_cp=mate_cp)
-        enc_probs = model_distribution_over_legal_moves(model, item=item, device=args.device, temperature=args.temperature)
-
-        dec_probs = {}
-        if decoder is not None:
-            dec_probs = decoder_distribution_over_legal_moves(
-                decoder,
-                fen=item["fen"],
-                uci_prefix=uci_prefix,
-                device=args.device,
-                temperature=args.decoder_temperature,
-            )
-
-        moves_union = choose_union_moves_3(
-            teacher_probs, enc_probs, dec_probs,
-            enc_topk=int(args.model_topk),
-            dec_topk=int(args.decoder_topk),
-        )
-
-        outpath = outdir / f"pos_{k:03d}_idx_{idx}.png"
-        plot_one_position(
-            idx=int(idx),
-            fen=item["fen"],
-            moves=moves_union,
-            teacher_probs=teacher_probs,
-            enc_probs=enc_probs,
-            dec_probs=dec_probs,
-            outpath=outpath,
-        )
-
-    print("[done]")
+    print(f"[done] saved to {outpath.resolve()}")
 
 
 if __name__ == "__main__":
