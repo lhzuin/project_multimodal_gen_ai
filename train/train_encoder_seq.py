@@ -113,6 +113,9 @@ class Trainer:
         self.val_loader = None
 
         self.optimizer = None
+        self.scheduler = None
+        self.stage_name = None
+        self.current_epoch = 0
 
         self.patience = cfg.early_stopping.patience
         self.min_epochs = cfg.early_stopping.min_epochs
@@ -133,6 +136,7 @@ class Trainer:
 
         self.grad_accum_steps = int(getattr(cfg, "trainer", {}).get("grad_accum_steps", 1))
         self.grad_clip_norm = float(getattr(cfg, "trainer", {}).get("grad_clip_norm", 1.0))
+        self.checkpoint_load_path = getattr(cfg, "checkpoint_load_path", None)
 
     def init_data(self):
         # Dataset + collate from Hydra
@@ -178,7 +182,7 @@ class Trainer:
         self.loss_fn = hydra.utils.instantiate(self.cfg.loss_fn)
 
     
-    def _forward_loss_and_metrics(self, batch):
+    def _forward_loss_and_metrics(self, batch, drop_illegal_targets=False):
         # Expect sequence batch:
         # labels64: [B,T,64] long
         # legal_flat: [B,T,4096] bool
@@ -228,8 +232,32 @@ class Trainer:
         if getattr(self.cfg, "use_legal_mask", True):
             legal_flat = batch["legal_flat"].to(self.device, non_blocking=True).view(BT, 4096)  # [BT,4096]
             # Only mask valid positions to avoid wasting compute (optional but cheap)
-            neg_inf = torch.finfo(flat_logits.dtype).min
-            flat_logits = flat_logits.masked_fill(~legal_flat, neg_inf)
+            #neg_inf = torch.finfo(flat_logits.dtype).min
+            flat_logits = flat_logits.float()  # CE is more stable in fp32
+            flat_logits = flat_logits.masked_fill(~legal_flat, -1e9)
+            #flat_logits = flat_logits.masked_fill(~legal_flat, neg_inf)
+            if drop_illegal_targets:
+                # remove positions where target is masked illegal
+                valid_idx = valid.nonzero(as_tuple=False).squeeze(1)
+                tgt = target[valid]
+                tgt_is_legal = legal_flat[valid_idx, tgt]
+                #dropped = int((~tgt_is_legal).sum().item())
+                # if dropped > 0:
+                #     kept = int(tgt_is_legal.sum().item())
+                #     total = dropped + kept
+                #     print(f"Warning: dropped {dropped}/{total} illegal targets")
+                #     print("Example:", int(tgt[~tgt_is_legal][0].item()))
+                    
+                #     ex = int(tgt[~tgt_is_legal][0].item())
+                #     fs, ts = divmod(ex, 64)
+                #     print(f"Example: {ex}  {chess.square_name(fs)}->{chess.square_name(ts)}")
+
+                if tgt_is_legal.sum().item() == 0:
+                    return None
+
+                valid2 = valid.clone()
+                valid2[valid_idx] = tgt_is_legal
+                valid = valid2
 
         # Loss on valid only
         loss_policy = F.cross_entropy(flat_logits[valid], target[valid])
@@ -249,7 +277,7 @@ class Trainer:
         n = int(valid.sum().item())
         return loss, correct1, correct5, n
 
-    def run_epoch(self, stage_name, scheduler):
+    def run_epoch(self, stage_name):
         self.model.train()
         total_loss, total_correct, total_correct5, total_n = 0.0, 0, 0, 0
 
@@ -263,7 +291,7 @@ class Trainer:
 
             if self.scaler:
                 with autocast(device_type=self.device.type):
-                    res = self._forward_loss_and_metrics(batch)
+                    res = self._forward_loss_and_metrics(batch, drop_illegal_targets=True)
                     if res is None:
                         continue
                     loss, correct, correct5, n = res
@@ -271,7 +299,7 @@ class Trainer:
 
                 self.scaler.scale(loss_scaled).backward()
             else:
-                res = self._forward_loss_and_metrics(batch)
+                res = self._forward_loss_and_metrics(batch, drop_illegal_targets=True)
                 if res is None:
                     continue
                 loss, correct, correct5, n = res
@@ -313,8 +341,8 @@ class Trainer:
 
                 self.optimizer.zero_grad(set_to_none=True)
 
-                if scheduler:
-                    scheduler.step()
+                if self.scheduler:
+                    self.scheduler.step()
 
         # If last partial accumulation didn't trigger a step, you can either:
         # (A) ignore it (common), or
@@ -331,7 +359,7 @@ class Trainer:
         for batch in self.val_loader:
             if batch_is_empty(batch):
                 continue
-            res = self._forward_loss_and_metrics(batch)
+            res = self._forward_loss_and_metrics(batch, drop_illegal_targets=True)
             if res is None:
                 continue
             loss, correct, correct5, n = res
@@ -347,6 +375,7 @@ class Trainer:
 
     def run_stage(self, stage_dict):
         stage_name = stage_dict["name"]
+        self.stage_name = stage_name  # for signal handler access
         print(f"\nRunning stage: {stage_name}")
         print(">>> Optim cfg:", self.cfg.optim)
 
@@ -359,21 +388,42 @@ class Trainer:
             _convert_="all",
         )
 
-        scheduler = None
         if self.cfg.use_warmup:
             steps_per_epoch = len(self.train_loader) // self.grad_accum_steps
             num_training_steps = stage_dict["epochs"] * steps_per_epoch
-            scheduler = build_scheduler_for_stage(
+            self.scheduler = build_scheduler_for_stage(
                 self.optimizer,
                 stage_dict=stage_dict,
                 cfg=self.cfg,
                 num_training_steps=num_training_steps,
             )
 
+
+        start_epoch = 0
+        if self.checkpoint_load_path and os.path.exists(self.checkpoint_load_path):
+            ckpt = torch.load(self.checkpoint_load_path, map_location=self.device)
+
+            # Only resume if checkpoint is for this stage
+            if ckpt.get("stage_name") == stage_name:
+                self.model.load_state_dict(ckpt["model"])
+
+                if ckpt.get("optimizer") is not None:
+                    self.optimizer.load_state_dict(ckpt["optimizer"])
+
+                if self.scaler is not None and ckpt.get("scaler") is not None:
+                    self.scaler.load_state_dict(ckpt["scaler"])
+
+                if self.scheduler is not None and ckpt.get("scheduler") is not None:
+                    self.scheduler.load_state_dict(ckpt["scheduler"])
+
+                start_epoch = int(ckpt.get("epoch", -1)) + 1
+                print(f"Resuming {stage_name} from epoch {start_epoch}")
+
         best_val_loss, best_val_acc, epochs_no_improve = float("inf"), 0.0, 0
 
-        for epoch in range(stage_dict["epochs"]):
-            train_loss, train_acc, train_acc5 = self.run_epoch(stage_name, scheduler)
+        for epoch in range(start_epoch, stage_dict["epochs"]):
+            self.current_epoch = epoch  # for signal handler access
+            train_loss, train_acc, train_acc5 = self.run_epoch(stage_name)
             val_loss, val_acc, val_acc5 = self.run_validation()
 
             print(
@@ -402,7 +452,15 @@ class Trainer:
 
             if improved:
                 best_val_loss, best_val_acc, epochs_no_improve = val_loss, val_acc, 0
-                torch.save(self.model.state_dict(), self.checkpoint_save_path)
+                # torch.save(self.model.state_dict(), self.checkpoint_save_path)
+                torch.save({
+                    "model": self.model.state_dict(),
+                    "optimizer": self.optimizer.state_dict(),
+                    "scaler": self.scaler.state_dict() if self.scaler is not None else None,
+                    "scheduler": self.scheduler.state_dict() if self.scheduler is not None else None,
+                    "stage_name": stage_name,
+                    "epoch": epoch,
+                }, self.checkpoint_save_path)
                 print(f"  -> saved best: val_acc={best_val_acc:.4f} val_loss={best_val_loss:.4f}")
             else:
                 epochs_no_improve += 1
@@ -415,11 +473,11 @@ class Trainer:
             if i > 0:
                 print("Reloading best model from previous stage.")
                 state = torch.load(self.checkpoint_save_path, map_location=self.device)
-                self.model.load_state_dict(state)
+                self.model.load_state_dict(state["model"])
             self.run_stage(stage_dict)
 
 
-@hydra.main(config_path="../configs", config_name="chess_encoder_seq_v1", version_base="1.1")
+@hydra.main(config_path="../configs", config_name="chess_encoder_seq_v2_cont", version_base="1.1")
 def main(cfg):
     set_seed(int(cfg.seed))
 
@@ -437,7 +495,16 @@ def main(cfg):
     trainer.init_model()
 
     def save_and_exit(*_):
-        torch.save(trainer.model.state_dict(), cfg.checkpoint_save_path)
+        # torch.save(trainer.model.state_dict(), cfg.checkpoint_save_path)
+        torch.save({
+            "model": trainer.model.state_dict(),
+            "optimizer": trainer.optimizer.state_dict(),
+            "scaler": trainer.scaler.state_dict() if trainer.scaler is not None else None,
+            "scheduler": trainer.scheduler.state_dict() if trainer.scheduler is not None else None,
+            "stage_name": trainer.stage_name,
+            "epoch": trainer.current_epoch,
+        }, trainer.checkpoint_save_path)
+        
         print(f"Saved checkpoint → {cfg.checkpoint_save_path}")
         sys.exit(0)
 

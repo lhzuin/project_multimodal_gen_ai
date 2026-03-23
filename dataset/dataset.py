@@ -294,6 +294,7 @@ class ChessGameSampleDataset(Dataset):
 
         # current move encoding
         fs, ts, pr = encode_move_from_board(board, mv)
+
         move_from = torch.tensor(fs, dtype=torch.long)
         move_to = torch.tensor(ts, dtype=torch.long)
         move_promo = torch.tensor(pr, dtype=torch.long)
@@ -475,7 +476,7 @@ class ChessGameSequenceDataset(Dataset):
         start_fen, moves = loaded
         n = len(moves)
         if n <= 0:
-            print("Warning: invalid move (no moves in game)")
+            #print("Warning: invalid move (no moves in game)")
             return {"valid": False}
 
         # Choose a contiguous window
@@ -536,6 +537,7 @@ class ChessGameSequenceDataset(Dataset):
 
             # --- target move encoding ---
             fs, ts, pr = encode_move_from_board(board, mv)
+    
             if fs < 0 or ts < 0:
                 print("Warning: invalid move (encode failed)")
                 return {"valid": False}

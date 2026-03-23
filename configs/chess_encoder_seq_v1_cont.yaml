@@ -1,4 +1,4 @@
-experiment_name: "chess_encoder_seq_v1"
+experiment_name: "chess_encoder_seq_v1_cont5"
 wandb_project: "chess_vision"
 log: true
 seed: 42
@@ -6,7 +6,7 @@ acc_epsilon: 1e-3
 img_resolution: 256
 
 checkpoint_save_path: ${experiment_name}.pt
-checkpoint_load_path: null #${hydra:runtime.cwd}/checkpoints/chess_encoder_seq_v1.pt
+checkpoint_load_path: ${hydra:runtime.cwd}/checkpoints/chess_encoder_seq_v1_cont4.pt
 use_warmup: true
 use_legal_mask: true
 train_input: pieces   # or "image"
