@@ -119,7 +119,7 @@ def main():
     ap.add_argument("--topk", type=int, default=20)
     ap.add_argument("--greedy", action="store_true")
     ap.add_argument("--n_layers", type=int, default=8)
-    ap.add_argument("--version", type=int, default=2)
+    ap.add_argument("--version", type=int, default=2, choices=[1, 2])
 
     # encoder
     ap.add_argument("--img_size", type=int, default=256)
@@ -207,14 +207,9 @@ def main():
         if version == 2:
             player = ChessEncoderPlayerV2(
                 img_size=args.img_size,
-                encoder_dim=256,
-                n_heads=4,
-                n_layers=8,
-                encoder_dropout=0.1,
-                ep_embed_dim=16,
-                piece_embed_dim=32,
                 vit_path=args.vit_path,
                 freeze_vit=args.freeze_vit,
+                n_layers=args.n_layers,
             )
 
             player.load_state_dict(sd, strict=True) 
@@ -313,7 +308,7 @@ def main():
                     greedy=args.greedy,
                 )[0]
             
-            if args.version == 2:
+            elif args.version == 2:
                 mv = player.sample_moves(
                     #piece_probs=piece_probs,
                     labels64=labels64,
@@ -325,6 +320,8 @@ def main():
                     topk=(args.topk if args.topk > 0 else None),
                     greedy=args.greedy,
                 )[0]
+            else:
+                raise ValueError(f"Unsupported encoder version: {args.version}")
 
         if mv not in board.legal_moves:
             # safety fallback

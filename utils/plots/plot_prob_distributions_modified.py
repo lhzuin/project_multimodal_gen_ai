@@ -396,7 +396,7 @@ def plot_one_position(
 
     plt.xticks(x, moves, rotation=35, ha="right", fontsize=13)
     plt.yticks(fontsize=13)
-    plt.ylabel("Probability", fontsize=15)
+    plt.ylabel("Probability", fontsize=15, weight="bold")
     plt.title(
         "Probability Distribution Comparison",
         fontsize=18,
