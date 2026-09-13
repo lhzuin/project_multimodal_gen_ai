@@ -531,3 +531,23 @@ For stable and reproducible experiments:
 ### UCI / GUI usage
 - `python -m utils.uci_engine`
 - `python -m utils.tournament_uci_engine`
+
+## TG2 balanced late-game training
+
+TG2 balanced training is integrated as an **optional dataset-level plan**, so the original training configs remain backward compatible. The offline planner selects fixed PGN windows and emits a bit-packed supervision mask; at runtime, masked targets contribute no loss while the decoder still sees their move tokens as causal context.
+
+The reference balanced configs are:
+
+- `configs/chess_encoder_seq_balanced_v1.yaml` (based on `chess_encoder_seq_v2.yaml`)
+- `configs/chess_decoder_player_balanced_v1.yaml` (based on `chess_decoder_player_v12.yaml`)
+
+Run them from the repository root with:
+
+```bash
+python -m train.train_encoder_seq --config-name chess_encoder_seq_balanced_v1
+python -m train.train_chessdecoder --config-name chess_decoder_player_balanced_v1
+```
+
+The ordinary commands/configs continue to use the legacy unmasked datasets. The balanced configs keep the existing `val_fraction: 0.05`, so training still creates a fresh seeded game/item validation split automatically; no historical validation exclusion is required for this protocol.
+
+See `docs/balanced_training_integration.md` for the exact runtime contract, decoder off-by-one mapping, fail-fast checks, expected step counts, and testing procedure. See `docs/balanced_training_method.tex` for the methodological/TG2 write-up and `utils/balanced_training_plan.py` for offline plan construction.

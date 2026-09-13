@@ -8,6 +8,9 @@ venv/
 *.mp4
 *.mov
 *.pdf
+*.bin
+*.npy
+*.sqlite*
 outputs/
 distill_db/
 __pycache__/  

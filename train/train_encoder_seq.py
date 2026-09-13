@@ -266,6 +266,16 @@ class Trainer:
         promo_t = move_promo.view(BT)                 # [BT]
 
         valid = attn_mask.view(BT) & (move_from.view(BT) >= 0) & (move_to.view(BT) >= 0)
+        if "loss_mask" in batch:
+            # Balanced-plan supervision is independent from sequence validity: a
+            # position may remain present in the item while contributing no loss.
+            loss_mask = batch["loss_mask"].to(self.device, non_blocking=True)
+            if loss_mask.shape != attn_mask.shape:
+                raise ValueError(
+                    f"loss_mask shape {tuple(loss_mask.shape)} does not match "
+                    f"attn_mask shape {tuple(attn_mask.shape)}"
+                )
+            valid = valid & loss_mask.view(BT)
         if valid.sum().item() == 0:
             return None
 

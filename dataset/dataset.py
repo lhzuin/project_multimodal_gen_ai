@@ -18,6 +18,7 @@ from PIL import Image
 from .offsets import load_pgn_offsets, ensure_offsets
 from .renderer import SpriteBoardRenderer, board_to_grid_ids, encode_move_from_board
 from .augmentations import make_albu_augment
+from .balanced_training_plan import BalancedPlanError, BalancedTrainingPlan
 
 
 def pil_to_tensor(img: Image.Image) -> torch.Tensor:
@@ -386,9 +387,19 @@ class ChessGameSequenceDataset(Dataset):
         return_images: bool = False,
         return_piece_probs: bool = True,
         cache_size: int = 64,
+        balanced_plan_dir: Optional[str] = None,
     ):
         self.pgn_path = pgn_path
         self.index_path = index_path
+        self.balanced_plan = (
+            BalancedTrainingPlan(
+                balanced_plan_dir,
+                expected_profile="encoder",
+                reservoir_pgn=pgn_path,
+            )
+            if balanced_plan_dir is not None
+            else None
+        )
         self.seed = int(seed)
         self.max_seq_len = int(max_seq_len)
         self.random_window = bool(random_window)
@@ -397,19 +408,28 @@ class ChessGameSequenceDataset(Dataset):
         self.return_images = bool(return_images)  # supported but default False (much faster)
         self.return_piece_probs = bool(return_piece_probs)
 
-        # Load offsets
-        ensure_offsets(pgn_path, index_path)
-        self.index = load_pgn_offsets(index_path)
-        self.games = self.index["games"]
+        # A balanced plan already stores exact PGN byte offsets for each selected
+        # item.  Avoid loading/rebuilding the (potentially multi-million-game) JSON
+        # index in that mode; the legacy path is intentionally unchanged.
+        if self.balanced_plan is None:
+            ensure_offsets(pgn_path, index_path)
+            self.index = load_pgn_offsets(index_path)
+            self.games = self.index["games"]
+        else:
+            self.index = None
+            self.games = None
 
         # Runtime state per worker
         self._fh = None
         self.cache_size = int(cache_size)
         self._cache: Optional[OrderedDict[int, Optional[Tuple[str, List[chess.Move]]]]] = None
 
-        # NOTE: We do NOT precompute samples here. Dataset length = number of games.
-        # You can filter very short games if you want; for now keep all.
-        self.game_list_indices = list(range(len(self.games)))
+        # Legacy mode keeps one item per indexed game.  Balanced mode instead uses
+        # exactly the planner-selected items, which is what preserves the intended
+        # DataLoader/optimizer-step budget.
+        self.game_list_indices = (
+            list(range(len(self.games))) if self.balanced_plan is None else None
+        )
 
         self.return_legal = True
 
@@ -420,6 +440,8 @@ class ChessGameSequenceDataset(Dataset):
         return state
 
     def __len__(self) -> int:
+        if self.balanced_plan is not None:
+            return len(self.balanced_plan)
         return len(self.game_list_indices)
 
     def _get_fh(self):
@@ -465,29 +487,58 @@ class ChessGameSequenceDataset(Dataset):
         return value
 
     def __getitem__(self, idx: int) -> Dict[str, Any]:
-        game_list_idx = self.game_list_indices[idx]
-        g = self.games[game_list_idx]
-
-        loaded = self._load_moves_for_game(game_list_idx)
-        if loaded is None:
-            print("Warning: invalid move (parse failed)")
-            return {"valid": False}
-
-        start_fen, moves = loaded
-        n = len(moves)
-        if n <= 0:
-            #print("Warning: invalid move (no moves in game)")
-            return {"valid": False}
-
-        # Choose a contiguous window
-        L = min(self.max_seq_len, n)
-        if self.random_window and n > L:
-            # per-call randomness is OK; workers each have their own RNG stream
-            start = random.randint(0, n - L)
+        planned_loss_mask = None
+        if self.balanced_plan is not None:
+            # The planner owns both game selection and window placement.  Reading
+            # directly from its byte offsets avoids a second huge PGN index and makes
+            # the runtime contract independent of raw reservoir game numbering.
+            row = self.balanced_plan.selected_game(idx)
+            game_list_idx = int(row["game_id"])
+            game_bytes = self._read_game_bytes(int(row["pgn_start"]), int(row["pgn_end"]))
+            game = _parse_game_bytes(game_bytes)
+            if game is None:
+                raise BalancedPlanError(
+                    f"planned encoder item {idx} no longer parses from the reservoir PGN"
+                )
+            start_fen = game.board().fen()
+            moves = list(game.mainline_moves())
+            n = len(moves)
+            if n != int(row["ply_count"]):
+                raise BalancedPlanError(
+                    f"planned encoder item {idx} expected {int(row['ply_count'])} plies, "
+                    f"found {n}; the plan and reservoir PGN do not match"
+                )
+            start = int(row["window_start"])
+            end = int(row["window_stop"])
+            L = end - start
+            if L > self.max_seq_len:
+                raise BalancedPlanError(
+                    f"planned encoder window has {L} plies but max_seq_len={self.max_seq_len}"
+                )
+            planned_loss_mask = self.balanced_plan.local_loss_mask(idx)
+            if len(planned_loss_mask) != L:
+                raise BalancedPlanError("encoder plan loss mask/window length mismatch")
         else:
-            start = 0
+            game_list_idx = self.game_list_indices[idx]
+            loaded = self._load_moves_for_game(game_list_idx)
+            if loaded is None:
+                print("Warning: invalid move (parse failed)")
+                return {"valid": False}
 
-        end = start + L
+            start_fen, moves = loaded
+            n = len(moves)
+            if n <= 0:
+                #print("Warning: invalid move (no moves in game)")
+                return {"valid": False}
+
+            # Legacy behavior: choose a fresh contiguous window on every access.
+            L = min(self.max_seq_len, n)
+            if self.random_window and n > L:
+                # per-call randomness is OK; workers each have their own RNG stream
+                start = random.randint(0, n - L)
+            else:
+                start = 0
+            end = start + L
 
         board = chess.Board(start_fen)
         # advance to window start
@@ -552,9 +603,14 @@ class ChessGameSequenceDataset(Dataset):
                 print("Warning: invalid move (push failed)")
                 return {"valid": False}
 
+        output_game_idx = (
+            game_list_idx
+            if self.balanced_plan is not None
+            else int(self.games[game_list_idx]["idx"])
+        )
         out = {
             "valid": True,
-            "game_idx": torch.tensor(g["idx"], dtype=torch.long),
+            "game_idx": torch.tensor(output_game_idx, dtype=torch.long),
             "seq_len": torch.tensor(L, dtype=torch.long),
             "move_from": torch.stack(move_from_seq, dim=0),   # [T]
             "move_to": torch.stack(move_to_seq, dim=0),       # [T]
@@ -567,6 +623,9 @@ class ChessGameSequenceDataset(Dataset):
 
         out["labels64"] = torch.stack(labels64_seq, dim=0)  # [T,64]
         out["legal_flat"] = torch.stack(legal_flat_seq, dim=0)  # [T,4096] bool
+        if planned_loss_mask is not None:
+            # This is supervision metadata, not an attention/padding mask.
+            out["loss_mask"] = torch.from_numpy(planned_loss_mask.copy()).bool()
 
         # Images sequence is intentionally not implemented here (too slow / big).
         # If you really need it, we can add it later.

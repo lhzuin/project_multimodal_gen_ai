@@ -83,6 +83,11 @@ def collate_game_sequences(batch):
 
     game_idx = torch.stack([b["game_idx"] for b in batch], dim=0)
 
+    has_loss_mask = ["loss_mask" in b for b in batch]
+    if any(has_loss_mask) and not all(has_loss_mask):
+        raise ValueError("cannot collate a mixture of planned and legacy encoder items")
+    loss_mask = torch.zeros((B, T), dtype=torch.bool) if all(has_loss_mask) else None
+
     for i, b in enumerate(batch):
         Li = int(b["seq_len"].item())
         attn_mask[i, :Li] = True
@@ -98,6 +103,14 @@ def collate_game_sequences(batch):
         move_from[i, :Li] = b["move_from"]
         move_to[i, :Li] = b["move_to"]
         move_promo[i, :Li] = b["move_promo"]
+
+        if loss_mask is not None:
+            item_mask = b["loss_mask"].bool()
+            if item_mask.ndim != 1 or item_mask.numel() != Li:
+                raise ValueError(
+                    f"encoder loss_mask must have shape [{Li}], got {tuple(item_mask.shape)}"
+                )
+            loss_mask[i, :Li] = item_mask
 
         if fen is not None:
             fen.append(b["fen"])  # list[str] length Li
@@ -118,6 +131,10 @@ def collate_game_sequences(batch):
     }
     if fen is not None:
         out["fen"] = fen              # list[list[str]] (ragged)
+    if loss_mask is not None:
+        # Supervision mask is deliberately separate from ``attn_mask``: positions
+        # may remain valid model inputs while contributing no training loss.
+        out["loss_mask"] = loss_mask  # [B,T] bool
 
     return out
 
