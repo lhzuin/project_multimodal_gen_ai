@@ -1,0 +1,8 @@
+[Unit]
+Description=Process one training recovery queue poll
+After=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h/project_multimodal_gen_ai
+ExecStart=%h/project_multimodal_gen_ai/.venv/bin/python -m train.recovery_orchestrator --csv %h/project_multimodal_gen_ai/configs/train_queue.csv

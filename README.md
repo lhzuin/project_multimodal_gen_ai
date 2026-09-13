@@ -101,6 +101,43 @@ source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
+## Automatic training recovery
+
+Long training runs can be queued in [`configs/train_queue.csv`](configs/train_queue.csv).
+The queue is processed in order and has three states:
+
+- `pending`: start the command from the beginning;
+- `running`: the previous tmux process disappeared, so start it with
+  `resume_override` (by default `checkpoint_load_path=auto`);
+- `completed`: leave it untouched and continue with the next row.
+
+The orchestrator keeps one tmux session per row. A clean exit marks the row
+`completed`; a non-zero exit leaves it as `running`, so the next poll resumes
+from the latest checkpoint. Training code should therefore save checkpoints
+frequently enough for the desired recovery point.
+
+Run one poll manually from the repository root:
+
+```bash
+python -m train.recovery_orchestrator --csv configs/train_queue.csv
+```
+
+To install the systemd timer for a user service, adjust the project paths in
+[`deploy/train-recovery.service`](deploy/train-recovery.service) if needed and
+copy both unit files to `~/.config/systemd/user/`:
+
+```bash
+mkdir -p ~/.config/systemd/user
+cp deploy/train-recovery.service deploy/train-recovery.timer ~/.config/systemd/user/
+systemctl --user daemon-reload
+systemctl --user enable --now train-recovery.timer
+systemctl --user status train-recovery.timer
+```
+
+The timer runs one poll every 30 seconds. It requires `tmux` to be installed
+and a user systemd instance that remains active after logout (for example,
+`loginctl enable-linger "$USER"` on a machine where that is appropriate).
+
 All commands below assume they are run from the repository root inside the project environment.
 
 ## Core training artifacts
