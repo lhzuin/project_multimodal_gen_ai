@@ -2,11 +2,13 @@ experiment_name: "chess_encoder_seq_v2"
 wandb_project: "chess_vision"
 log: true
 seed: 42
+device: auto  # auto selects CUDA, then Apple MPS, then CPU
 acc_epsilon: 1e-3
 img_resolution: 256
 
-checkpoint_save_path: ${experiment_name}.pt
-checkpoint_load_path: null #${hydra:runtime.cwd}/checkpoints/chess_encoder_seq_v1.pt
+checkpoint_save_path: ${hydra:runtime.cwd}/checkpoints/${experiment_name}.latest.pt
+checkpoint_load_path: null  # set to auto or a path on the command line to resume
+checkpoint_keep_last: 3     # rotating weight-only epoch snapshots (plus latest and best)
 use_warmup: true
 use_legal_mask: true
 train_input: pieces   # or "image"
@@ -14,6 +16,9 @@ train_input: pieces   # or "image"
 trainer:
   grad_accum_steps: 4        # 256*4 = global batch 1024 (recommended)  [oai_citation:9‡Literature‑backed hyperparameters for a small–medium Transformer chess policy network.pdf](sediment://file_00000000921472468c25bbb345c81e8d)
   grad_clip_norm: 1.0
+  wandb_init_retries: 2
+  wandb_retry_delay_seconds: 5
+  wandb_offline_fallback: true
 
 data:
   val_fraction: 0.05

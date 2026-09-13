@@ -2,15 +2,21 @@ experiment_name: "chess_llm_decoder_v12"
 wandb_project: "chess_vision"
 log: true
 seed: 42
+device: auto  # auto selects CUDA, then Apple MPS, then CPU
 acc_epsilon: 1e-3
 
-checkpoint_save_path: ${experiment_name}.pt
+checkpoint_save_path: ${hydra:runtime.cwd}/checkpoints/${experiment_name}.latest.pt
+checkpoint_load_path: null  # set to auto or a path on the command line to resume
+checkpoint_keep_last: 3     # rotating weight-only epoch snapshots (plus latest and best)
 use_warmup: true
 piece_loss_weight: 0.3
 
 trainer:
   grad_accum_steps: 1
   grad_clip_norm: 1.0
+  wandb_init_retries: 2
+  wandb_retry_delay_seconds: 5
+  wandb_offline_fallback: true
 
 data:
   val_fraction: 0.05

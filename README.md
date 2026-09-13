@@ -259,6 +259,45 @@ Recommended final config:
 python -m train.train_chessdecoder --config-name chess_decoder_player_v12
 ```
 
+### Checkpoints and crash recovery
+
+The encoder-sequence and decoder trainers save three kinds of files under
+`checkpoints/`:
+
+- `<experiment>.latest.pt` is the atomic, resumable latest checkpoint. It
+  contains the model, optimizer, scheduler, gradient scaler, training cursor,
+  early-stopping state, RNG states, resolved config, and W&B run ID.
+- `<experiment>.best.pt` contains only the best model weights for evaluation.
+- `<experiment>.<stage>.epoch-NNNN.pt` files are rotating, weight-only snapshots.
+  `checkpoint_keep_last` controls how many are retained.
+
+`SIGINT`, `SIGTERM`, and (on Unix/macOS) `SIGUSR1` request a graceful stop. The
+trainer waits for the next optimizer boundary, writes the resumable checkpoint,
+and exits without saving a model/optimizer pair from a partial accumulation.
+
+Resume the latest checkpoint with the normal config and one command-line
+override; no continuation YAML is needed:
+
+```bash
+python -m train.train_encoder_seq checkpoint_load_path=auto
+python -m train.train_chessdecoder checkpoint_load_path=auto
+```
+
+To resume a specifically named full checkpoint, pass its path instead. Passing
+a weight-only snapshot or an older legacy state dict is also supported, but is
+treated as a warm start because optimizer/scheduler progress is not available:
+
+```bash
+python -m train.train_encoder_seq \
+  checkpoint_load_path=/absolute/path/to/checkpoint.pt
+```
+
+Use `device=auto` (the default) for CUDA, Apple MPS, then CPU selection, or set
+`device=cuda:0`, `device=mps`, or `device=cpu` explicitly. If W&B cannot be
+initialized after bounded retries, metrics are written in offline mode and can
+later be uploaded with `wandb sync <run-directory>`; checkpointing and training
+continue independently of logging failures.
+
 ## Step 6 — Train the distilled encoder
 
 The distilled encoder uses offline teacher supervision from Stockfish top moves rather than only the human next move.
