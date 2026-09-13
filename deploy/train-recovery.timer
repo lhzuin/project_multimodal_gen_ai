@@ -1,0 +1,10 @@
+[Unit]
+Description=Poll the training recovery queue every 30 seconds
+
+[Timer]
+OnBootSec=30s
+OnUnitActiveSec=30s
+Unit=train-recovery.service
+
+[Install]
+WantedBy=timers.target
