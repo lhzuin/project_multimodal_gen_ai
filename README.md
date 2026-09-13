@@ -96,8 +96,8 @@ Always run the sanity test after generating or modifying the training artifacts.
 Create a virtual environment from the repository root and install the dependencies.
 
 ```bash
-python -m venv .venv
-source .venv/bin/activate
+python -m venv venv312
+source venv312/bin/activate
 pip install -r requirements.txt
 ```
 

@@ -86,7 +86,7 @@ def _start_session(row: dict[str, str], *, resume: bool) -> None:
         "send-keys",
         "-t",
         f"{session}:0.0",
-        shlex.join(argv),
+        f"{shlex.join(argv)}; exit $?",
         "Enter",
         check=True,
     )
