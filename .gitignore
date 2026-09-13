@@ -4,6 +4,10 @@ venv/
 *.zip
 *.pt
 *.pgn
+*.png
+*.mp4
+*.mov
+*.pdf
 outputs/
 distill_db/
 __pycache__/  
