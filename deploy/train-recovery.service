@@ -6,3 +6,4 @@ After=network-online.target
 Type=oneshot
 WorkingDirectory=%h/project_multimodal_gen_ai
 ExecStart=%h/project_multimodal_gen_ai/venv312/bin/python -m train.recovery_orchestrator --csv %h/project_multimodal_gen_ai/configs/train_queue.csv
+KillMode=process

@@ -147,7 +147,50 @@ test -x venv312/bin/python && echo "Python da fila OK"
 
 ---
 
-## 5. Testar uma execução manual
+
+## 5. Testar se o linger esta ativado (necessario para poder logoff)
+To check the current linger status for your user:
+
+```bash
+loginctl show-user "$USER" -p Linger
+```
+
+Possible outputs:
+
+```text
+Linger=yes
+```
+
+or:
+
+```text
+Linger=no
+```
+
+To enable linger:
+
+```bash
+loginctl enable-linger "$USER"
+```
+
+If you get a permissions error, use:
+
+```bash
+sudo loginctl enable-linger "$USER"
+```
+
+Then verify again:
+
+```bash
+loginctl show-user "$USER" -p Linger
+```
+
+Expected:
+
+```text
+Linger=yes
+```
+## 6. Testar uma execução manual
 
 Ainda com o ambiente ativado:
 
@@ -199,7 +242,7 @@ tmux capture-pane \
 
 ---
 
-## 6. Testar a recuperação após falha
+## 7. Testar a recuperação após falha
 
 Se houver uma sessão antiga com o caminho incorreto, encerre-a:
 
@@ -243,7 +286,7 @@ Importante: o checkpoint mais recente precisa estar no local esperado pela confi
 
 ---
 
-## 7. Testar o `systemd`
+## 8. Testar o `systemd`
 
 Primeiro confirme os caminhos do serviço:
 
@@ -322,7 +365,7 @@ O timer deverá executar o serviço a cada 30 segundos.
 
 ---
 
-## 8. Garantir execução depois do logout
+## 9. Garantir execução depois do logout
 
 Para manter o serviço do usuário ativo após sair do SSH:
 
@@ -338,7 +381,7 @@ loginctl user-status "$USER"
 
 ---
 
-## 9. Comandos de acompanhamento
+## 10. Comandos de acompanhamento
 
 Estado da fila:
 
@@ -429,3 +472,4 @@ decoder-v12,running,...
 ```
 
 Se ele cair, permanecerá `running` e será relançado na próxima execução do timer com `checkpoint_load_path=auto`.
+
