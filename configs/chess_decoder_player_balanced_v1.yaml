@@ -61,9 +61,9 @@ dataset_train:
 
 dataset_val:
   _target_: dataset.pgn_move_dataset.PGNMoveDataset
-  pgn_path: ${hydra:runtime.cwd}/processed_games/by_category/twic_all_classic.pgn
-  index_path: ${hydra:runtime.cwd}/processed_games/by_category/twic_all_classic_index.json
-  balanced_plan_dir: ${hydra:runtime.cwd}/processed_games/balanced/decoder_xxl_classic_l050
+  pgn_path: ${hydra:runtime.cwd}/processed_games/by_category/all_classic_merged.pgn
+  index_path: ${hydra:runtime.cwd}/processed_games/by_category/all_classic_merged_index.json
+  balanced_plan_dir: ${hydra:runtime.cwd}/processed_games/balanced/decoder_merged_xxl_classic_l050
   tokenizer_path: ${hydra:runtime.cwd}/tokenizers/chess_uci_vocab.json
   block_size: 256
   strict: true

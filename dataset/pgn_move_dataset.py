@@ -109,6 +109,14 @@ class PGNMoveDataset(Dataset):
                 f"planned decoder item {idx} no longer parses from the reservoir PGN"
             )
 
+        moves = list(game.mainline_moves())
+        # Some source PGNs use ``--`` for missing moves.  python-chess parses these
+        # as null moves (UCI ``0000``), which are not physical chess moves and are
+        # intentionally absent from the tokenizer vocabulary.  Skip only these
+        # corrupt planned samples; the collator already filters invalid items.
+        if any(move == chess.Move.null() for move in moves):
+            return {"valid": False}
+
         try:
             full_move_ids, full_piece_ids = self.tok.encode_pgn_game(
                 game, strict=self.strict
@@ -125,7 +133,6 @@ class PGNMoveDataset(Dataset):
         if full_move_ids[-1] != self.tok.eos_id:
             raise BalancedPlanError("decoder tokenizer did not emit the expected EOS token")
 
-        moves = list(game.mainline_moves())
         n_moves = len(moves)
         if n_moves != int(row["ply_count"]):
             raise BalancedPlanError(
