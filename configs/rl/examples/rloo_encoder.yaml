@@ -1,0 +1,34 @@
+database:
+  manifest: train/grpo/examples/prompts.json
+checkpoint_path: checkpoints/chess_encoder_seq_balanced_v1.best.pt
+model_type: encoder
+model_kwargs:
+  version: 2
+  img_size: 256
+  encoder_dim: 256
+  n_heads: 4
+  n_layers: 8
+  encoder_dropout: 0.1
+  ep_embed_dim: 16
+  piece_embed_dim: 32
+server:
+  mode: remote
+  host: 127.0.0.1
+  port: 8765
+rloo:
+  training_batch_size: 2
+  rollouts_per_entry: 4
+  max_concurrent_games: 4
+  sampling_batch_size: 2
+  micro_batch_size: 1
+  ply_depth: 10
+  randomize_policy_color: true
+  temperature: 0.8
+  learning_rate: 1.0e-05
+  kl_beta: 0.04
+  reward_mode: tanh
+  reward_scale_cp: 400.0
+  device: auto
+epochs: 1
+output_checkpoint: checkpoints/rloo_encoder_demo.latest.pt
+export_weights: checkpoints/rloo_encoder_demo.pt

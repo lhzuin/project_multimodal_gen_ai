@@ -39,6 +39,14 @@ project_multimodal_gen_ai/
 - `processed_games/` contains merged PGNs and their byte-offset indices, as well as larger processed corpora used by different training branches.
 - `tokenizers/` contains the UCI tokenizer vocabulary used by the decoder.
 - `train/` contains the main training entry points.
+- `train/grpo/` provides modular policy-only GRPO training, a selected-position
+  dataset contract, and standalone YAML launch configs under `configs/rl/`; see [its guide](train/grpo/README.md).
+- `train/rloo/` provides the chosen RLOO loop and a [method comparison](train/rloo/README.md).
+- `train/rl/` holds the shared RL policies, contracts, rollout collector, and lifecycle.
+- `utils/dataset_rl/` builds and verifies the [mixed Lichess RL dataset](utils/dataset_rl/README.md),
+  including trigger alignment, frozen-policy confidence filtering, and TG2 provenance reports.
+- `rl_stockfish_service/` provides the asynchronous Stockfish rollout API used by
+  the RL trainers; see [its contract and startup guide](rl_stockfish_service/README.md).
 - `utils/` contains preparation scripts, tournament tools, opening-book generation, Stockfish-data helpers, plotting utilities, and UCI engines.
 - `checkpoints/` stores trained checkpoints.
 - `tournament_out/` stores tournament artifacts such as PGNs and summary files.

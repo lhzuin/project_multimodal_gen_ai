@@ -1,0 +1,60 @@
+database:
+  manifest: processed_games/rl/lichess_mixed_v1/train.json
+checkpoint_path: checkpoints/chess_encoder_seq_balanced_v1.best.pt
+model_type: encoder
+model_kwargs:
+  version: 2
+  img_size: 256
+  encoder_dim: 256
+  n_heads: 4
+  n_layers: 8
+  ep_embed_dim: 16
+  piece_embed_dim: 32
+server:
+  mode: local
+  opponent:
+    executable: /Users/luiszuin/Downloads/stockfish/stockfish-macos-m1-apple-silicon
+    workers: 3
+    threads_per_engine: 1
+    hash_mb_per_engine: 64
+    limit_strength: true
+    uci_elo: 2100
+    default_limit:
+      movetime_ms: 50
+  evaluator:
+    executable: /Users/luiszuin/Downloads/stockfish/stockfish-macos-m1-apple-silicon
+    workers: 1
+    threads_per_engine: 1
+    hash_mb_per_engine: 128
+    default_limit:
+      nodes: 100000
+rloo:
+  training_batch_size: 8
+  rollouts_per_entry: 4
+  max_concurrent_games: 8
+  sampling_batch_size: 2
+  micro_batch_size: 1
+  ply_depth: 10
+  randomize_policy_color: false
+  temperature: 0.8
+  learning_rate: 5.0e-06
+  kl_beta: 0.04
+  reward_mode: tanh
+  reward_scale_cp: 400.0
+  device: auto
+  seed: 42
+  max_grad_norm: 1.0
+epochs: 1
+save_every_batches: 10
+output_checkpoint: checkpoints/rloo_encoder_balanced_v1_lichess_mixed_v2.latest.pt
+export_weights: checkpoints/rloo_encoder_balanced_v1_lichess_mixed_v2.pt
+logging:
+  stdout: true
+  jsonl_path: logs/rloo_encoder_lichess_mixed_v2.metrics.jsonl
+  wandb:
+    enabled: false
+    project: chess_vision
+    name: rloo_encoder_lichess_mixed_v2
+    mode: online
+    offline_fallback: true
+    init_timeout_s: 30
