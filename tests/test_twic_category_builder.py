@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import json
+from contextlib import contextmanager
 from pathlib import Path
 import shutil
-import tempfile
 import unittest
+import uuid
 import zipfile
 
 import chess.pgn
@@ -17,6 +18,16 @@ from utils.dataset_by_category.twic_category_builder import (
     HttpIssueDownloader,
     TWICCategoryDatasetBuilder,
 )
+
+
+@contextmanager
+def workspace_temp_dir():
+    root = Path(__file__).parent / f"_twic_test_{uuid.uuid4().hex}"
+    root.mkdir()
+    try:
+        yield str(root)
+    finally:
+        shutil.rmtree(root)
 
 
 def _game(event: str, moves: str, white_elo: str = "2500", black_elo: str = "2500", variant: str | None = None) -> str:
@@ -62,8 +73,34 @@ class CategoryTests(unittest.TestCase):
 
 
 class BuilderTests(unittest.TestCase):
+    def test_full_range_keeps_all_games_and_deduplicates_across_issues(self) -> None:
+        with workspace_temp_dir() as raw_tmp:
+            root = Path(raw_tmp)
+            newer = root / "newer.zip"
+            older = root / "older.zip"
+            duplicate = _game("Open Championship", "1. e4 e5 2. Nf3 Nc6")
+            _make_zip(newer, duplicate + _game("Second Open", "1. d4 d5 2. c4"))
+            _make_zip(older, duplicate + _game("Third Open", "1. c4 e5 2. Nc3"))
+            result = TWICCategoryDatasetBuilder(
+                BuildConfig(None, ("classic",), root / "out", prefix="test",
+                            min_elo=1600, start_week=1667, lower_week=1666,
+                            all_games_in_range=True),
+                downloader=FakeDownloader({1667: newer, 1666: older}),
+            ).build()
+            self.assertEqual(result.games["classic"], 3)
+            self.assertTrue(result.target_reached["classic"])
+            report = json.loads(result.report_json_path.read_text(encoding="utf-8"))
+            self.assertTrue(report["range_complete"])
+            self.assertEqual(report["weeks"][1]["skipped"]["duplicate_game"], 1)
+            self.assertIsNotNone(report["weeks"][0]["download_sha256"])
+            with result.pgn_paths["classic"].open(encoding="utf-8") as stream:
+                issues = []
+                while game := chess.pgn.read_game(stream):
+                    issues.append(game.headers["TWICIssue"])
+            self.assertEqual(issues, ["1667", "1667", "1666"])
+
     def test_builds_filtered_training_artifacts_and_reports_failure(self) -> None:
-        with tempfile.TemporaryDirectory() as raw_tmp:
+        with workspace_temp_dir() as raw_tmp:
             root = Path(raw_tmp)
             week3 = root / "week3.zip"
             week2 = root / "week2.zip"
@@ -120,7 +157,7 @@ class BuilderTests(unittest.TestCase):
             self.assertEqual(game.headers["Event"], "Open Championship")
 
     def test_warns_when_lower_bound_is_exhausted(self) -> None:
-        with tempfile.TemporaryDirectory() as raw_tmp:
+        with workspace_temp_dir() as raw_tmp:
             root = Path(raw_tmp)
             week = root / "week.zip"
             _make_zip(week, _game("Only Blitz", "1. e4"))
@@ -133,7 +170,7 @@ class BuilderTests(unittest.TestCase):
             self.assertEqual(len(result.warnings), 2)
 
     def test_refuses_to_replace_existing_outputs_by_default(self) -> None:
-        with tempfile.TemporaryDirectory() as raw_tmp:
+        with workspace_temp_dir() as raw_tmp:
             root = Path(raw_tmp)
             output = root / "out"
             output.mkdir()
@@ -148,7 +185,7 @@ class BuilderTests(unittest.TestCase):
 
 class DownloaderTests(unittest.TestCase):
     def test_streaming_downloader_uses_fallback_and_validates_zip(self) -> None:
-        with tempfile.TemporaryDirectory() as raw_tmp:
+        with workspace_temp_dir() as raw_tmp:
             root = Path(raw_tmp)
             fallback = root / "fallback"
             fallback.mkdir()
