@@ -66,7 +66,13 @@ class ChessLLM(nn.Module):
         ])
         self.norm = nn.LayerNorm(model_dim)
 
-    def forward(self, input_ids: torch.Tensor, attention_mask: torch.Tensor | None = None, piece_input_ids: torch.Tensor | None =None):
+    def forward(
+        self,
+        input_ids: torch.Tensor,
+        attention_mask: torch.Tensor | None = None,
+        piece_input_ids: torch.Tensor | None = None,
+        capture_layers: tuple[int, ...] | list[int] | None = None,
+    ):
         """
         input_ids: [B,T] long
         attention_mask: [B,T] bool/0-1 where 1/True means "keep"
@@ -86,8 +92,17 @@ class ChessLLM(nn.Module):
         if attention_mask is not None:
             key_padding_mask = ~attention_mask.to(torch.bool)  # [B,T]
 
-        for layer in self.layers:
+        requested = set(capture_layers or ())
+        invalid = requested.difference(range(1, len(self.layers) + 1))
+        if invalid:
+            raise ValueError(f"capture_layers contains invalid 1-based layers: {sorted(invalid)}")
+        captured = {}
+        for layer_number, layer in enumerate(self.layers, start=1):
             x = layer(x, src_mask=attn_mask, src_key_padding_mask=key_padding_mask)
+            if layer_number in requested and layer_number != len(self.layers):
+                captured[layer_number] = x
 
         x = self.norm(x)
-        return x
+        if len(self.layers) in requested:
+            captured[len(self.layers)] = x
+        return (x, captured) if capture_layers is not None else x

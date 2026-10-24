@@ -1,0 +1,53 @@
+# Frozen decoder-state probe and on-policy drift experiment.
+device: auto
+
+paths:
+  pgn: processed_games/eval/twic_1662_1667_classic.pgn
+  index: processed_games/eval/twic_1662_1667_classic_index.json
+  tokenizer: tokenizers/chess_uci_vocab.json
+  comparison_output: outputs/twic_1662_1667
+  output_dir: outputs/twic_1662_1667_state_probe
+  reference_pgn: processed_games/processed_games/by_category/twic_large_5x_classic.pgn
+  reference_index: processed_games/processed_games/by_category/twic_large_5x_classic_index.json
+
+models:
+  decoder_baseline: chess_llm_decoder_v12.pt
+  decoder_balanced: chess_llm_decoder_balanced_v1_final.pt
+
+# Counts are per TWIC issue. The complete 15% test pool remains represented in
+# splits.csv; these selected counts define the CPU-first probe experiment.
+sample_games_per_issue:
+  train: 100
+  val: 20
+  test: 50
+
+extraction:
+  batch_size: 32
+
+evaluation:
+  # The final 256-token linear probe is streamed across every game in the 15%
+  # held-out pool. Layer/context/MLP diagnostics use the 300-game CPU sample.
+  full_test_pool: true
+
+probe:
+  seeds: [42, 43, 44]
+  batch_size: 512
+  max_epochs: 50
+  patience: 5
+  linear_lr: 0.001
+  mlp_lr: 0.0003
+  weight_decay: 0.0001
+
+selfplay:
+  prefix_plies: 8
+  max_generated_plies: 120
+
+novelty:
+  # Slightly above the measured 81,636,361 positions/plies in the reservoir.
+  capacity_positions: 90000000
+  false_positive_rate: 0.0001
+  checkpoint_every_games: 50000
+
+bootstrap:
+  replicates: 2000
+  seed: 42
