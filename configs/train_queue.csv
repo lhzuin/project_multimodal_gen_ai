@@ -1,0 +1,2 @@
+id,status,command,working_dir,session_name,resume_override
+chess_encoder_seq_balanced_rapid_v1,running,venv312/bin/python -m train.train_encoder_seq --config-name chess_encoder_seq_balanced_rapid_v1_continue,.,train-encoder-seq-balanced-rapid-v1,checkpoint_load_path=auto
