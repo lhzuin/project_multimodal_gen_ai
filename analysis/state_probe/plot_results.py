@@ -18,10 +18,16 @@ def _read(path: Path):
         return list(csv.DictReader(handle))
 
 
-def _svg_line_chart(path: Path, title: str, ylabel: str, labels: list[str], series: dict[str, list[float]]):
+def _svg_line_chart(path: Path, title: str, ylabel: str, labels: list[str], series: dict[str, list[float]],
+                    *, intervals=None, zero_line=False):
     if not labels or not series:
         raise ValueError(f"cannot plot empty data: {title}")
     values = [value for points in series.values() for value in points if math.isfinite(value)]
+    if intervals:
+        values.extend(value for bounds in intervals.values() for pair in bounds
+                      for value in pair if math.isfinite(value))
+    if zero_line:
+        values.append(0.0)
     low, high = min(values), max(values)
     padding = max((high - low) * .15, .01)
     low, high = low - padding, high + padding
@@ -36,11 +42,19 @@ def _svg_line_chart(path: Path, title: str, ylabel: str, labels: list[str], seri
     elements.append(f'<text x="18" y="300" font-size="15">{escape(ylabel)}</text>')
     denominator = max(1, len(labels) - 1)
     xs = [left + i * (right - left) / denominator for i in range(len(labels))]
+    if zero_line:
+        y_zero = bottom - (0 - low) / (high - low) * (bottom - top)
+        elements.append(f'<line x1="{left}" y1="{y_zero:.1f}" x2="{right}" y2="{y_zero:.1f}" stroke="#555" stroke-dasharray="6 4"/>')
     for x, label in zip(xs, labels):
         elements.append(f'<text x="{x:.1f}" y="548" text-anchor="middle" font-size="12">{escape(label)}</text>')
     for index, (name, points) in enumerate(series.items()):
         color = COLORS[index % len(COLORS)]
         ys = [bottom - (point - low) / (high - low) * (bottom - top) for point in points]
+        if intervals and name in intervals:
+            for x, (lower, upper) in zip(xs, intervals[name]):
+                lower_y = bottom - (lower - low) / (high - low) * (bottom - top)
+                upper_y = bottom - (upper - low) / (high - low) * (bottom - top)
+                elements.append(f'<path d="M{x:.1f},{lower_y:.1f} V{upper_y:.1f} M{x-5:.1f},{lower_y:.1f} H{x+5:.1f} M{x-5:.1f},{upper_y:.1f} H{x+5:.1f}" fill="none" stroke="{color}" opacity="0.5"/>')
         coords = " ".join(f"{x:.1f},{y:.1f}" for x, y in zip(xs, ys))
         elements.append(f'<polyline points="{coords}" fill="none" stroke="{color}" stroke-width="3"/>')
         for x, y in zip(xs, ys):
@@ -96,9 +110,13 @@ def write_report(path: Path, rows, deltas, interactions, associations, output: P
         "- `trajectory_gaps.csv`: self-play-minus-human gaps in the same absolute ply bands.",
         "- `novelty_summary.csv`: common-reference novelty by source and band.",
         "- `policy_error_association.csv`: human move metrics by probe-error quartile.", "",
+        "- `policy_probe_spearman.csv`: within-ply-band associations between game-average probe NLL and move NLL, with game-bootstrap intervals.", "",
         "## Figures", "",
         "The `figures/` directory contains the layer, context-window, trajectory, cross-replay, novelty, and policy-association plots. Numeric CSVs are authoritative.", "",
+        "`human_vs_selfplay_drift.svg` displays self-play-minus-human Board NLL in matching absolute-ply bands and matched openings, with 95% opening-bootstrap intervals from `trajectory_gaps.csv`. Only absolute plies present in both continuations are compared; the shared human prefix is excluded. Negative values mean lower probe loss on self-play positions. The other self-play plots use plies since branching, after the eight-ply human prefix. These are different time axes.", "",
     ]
+    if (output / "CONCLUSIONS.md").exists():
+        lines[2:2] = ["See [the numerical conclusions and limitations](CONCLUSIONS.md) for an interpretation of this run.", ""]
     path.write_text("\n".join(lines), encoding="utf-8")
 
 
@@ -125,18 +143,22 @@ def main(argv=None):
                     ["32", "64", "128", "256"],
                     {model: [_lookup(rows, source="human", model=model, condition=condition)
                              for condition in context_conditions] for model in models})
-    trajectory_series = {}
-    for source in ("human", *models):
-        labels = ply_buckets if source == "human" else gen_buckets
+    # Use matching absolute-ply bands and openings; human and generated bucket
+    # arrays describe different time axes and cannot be aligned by list index.
+    gaps = _read(args.output_dir / "trajectory_gaps.csv")
+    gap_lookup = {(row["trajectory_source"], row["encoded_by"], row["absolute_bucket"]): row
+                  for row in gaps if row["metric"] == "board_nll"}
+    trajectory_series, trajectory_intervals = {}, {}
+    for source in models:
         for model in models:
-            trajectory_series[f"{source} / {model}"] = [
-                _lookup(rows, source=source, model=model, condition="final_w256", bucket=bucket)
-                for bucket in labels
-            ]
-    # Human has six bands and generated has five. Use the first five common display slots.
-    trajectory_series = {key: value[:5] for key, value in trajectory_series.items()}
-    _svg_line_chart(figures / "human_vs_selfplay_drift.svg", "Human and self-play state drift",
-                    "Board NLL", list(gen_buckets), trajectory_series)
+            name = f"{source.removeprefix('decoder_')} policy / {model.removeprefix('decoder_')} probe"
+            selected = [gap_lookup[(source, model, bucket)] for bucket in ply_buckets]
+            trajectory_series[name] = [float(row["selfplay_minus_human"]) for row in selected]
+            trajectory_intervals[name] = [(float(row["ci_low"]), float(row["ci_high"])) for row in selected]
+    _svg_line_chart(figures / "human_vs_selfplay_drift.svg",
+                    "Self-play minus human board NLL (matched openings)",
+                    "Delta NLL", list(ply_buckets), trajectory_series,
+                    intervals=trajectory_intervals, zero_line=True)
     _svg_line_chart(figures / "cross_replay.svg", "Cross-replay comparison", "Board NLL",
                     list(gen_buckets),
                     {f"{source} / {model}": [_lookup(rows, source=source, model=model,

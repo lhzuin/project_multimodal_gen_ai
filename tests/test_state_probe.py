@@ -173,6 +173,7 @@ class TrajectoryAndStatisticsTests(unittest.TestCase):
                         "unit_id": opening, "game_id": opening,
                         "trajectory_source": "decoder_baseline", "encoded_by": model,
                         "condition": "final_w256", "generated_bucket": band,
+                        "ply": generated_ply + 8,
                         "bucket": absolute, "board_nll": base,
                         "occupied_nll": base + .1, "board_hamming": base / 2,
                     })
@@ -180,6 +181,7 @@ class TrajectoryAndStatisticsTests(unittest.TestCase):
                         "unit_id": opening, "game_id": opening,
                         "trajectory_source": "human", "encoded_by": model,
                         "condition": "final_w256", "generated_bucket": "",
+                        "ply": generated_ply + 8,
                         "bucket": absolute, "board_nll": base - .03,
                         "occupied_nll": base + .07, "board_hamming": base / 2 - .03,
                     })
@@ -191,6 +193,24 @@ class TrajectoryAndStatisticsTests(unittest.TestCase):
         self.assertTrue(all(row["n_openings"] == 3 for row in cross))
         self.assertTrue(any(row["encoded_by"] == "balanced_minus_baseline" for row in drift))
         self.assertTrue(all(row["ci_low"] <= row["ci_high"] for row in (*cross, *drift, *gaps)))
+
+    def test_trajectory_gap_matches_plies_and_excludes_unshared_prefix_and_tail(self):
+        rows = []
+        for opening in (1, 2, 3):
+            for source, values in (("human", ((0, 0.), (8, .4), (9, .5), (19, 5.))),
+                                   ("decoder_baseline", ((8, .5), (9, .6), (18, 6.)))):
+                for ply, value in values:
+                    rows.append({"unit_id": opening, "trajectory_source": source,
+                                 "encoded_by": "decoder_baseline", "condition": "final_w256",
+                                 "ply": ply, "bucket": "0_20", "board_nll": value,
+                                 "occupied_nll": value, "board_hamming": value})
+        result = _trajectory_gap_bootstrap(rows, {"bootstrap": {"seed": 42, "replicates": 50}})
+        self.assertEqual(len(result), 3)
+        for row in result:
+            self.assertEqual(row["n_openings"], 3)
+            self.assertAlmostEqual(row["human_mean"], .45)
+            self.assertAlmostEqual(row["selfplay_mean"], .55)
+            self.assertAlmostEqual(row["selfplay_minus_human"], .1)
 
     def test_split_assignment_is_stable(self):
         raw = b"[Event \"same game\"]\n\n1. e4 *\n"
@@ -275,6 +295,17 @@ class PlotArtifactTests(unittest.TestCase):
                     csv.DictWriter(handle, fieldnames=fields).writeheader()
             association_fields = ("encoded_by", "bucket", "probe_error_quartile",
                                   "n_positions", "policy_top1", "policy_nll")
+            with (directory / "trajectory_gaps.csv").open("w", newline="", encoding="utf-8") as handle:
+                writer = csv.DictWriter(handle, fieldnames=(
+                    "trajectory_source", "encoded_by", "absolute_bucket", "metric",
+                    "selfplay_minus_human", "ci_low", "ci_high"))
+                writer.writeheader()
+                for source in models:
+                    for model in models:
+                        for bucket in human_buckets:
+                            writer.writerow({"trajectory_source": source, "encoded_by": model,
+                                             "absolute_bucket": bucket, "metric": "board_nll",
+                                             "selfplay_minus_human": -.02, "ci_low": -.03, "ci_high": -.01})
             with (directory / "policy_error_association.csv").open("w", newline="", encoding="utf-8") as handle:
                 writer = csv.DictWriter(handle, fieldnames=association_fields)
                 writer.writeheader()
@@ -286,6 +317,11 @@ class PlotArtifactTests(unittest.TestCase):
                             "policy_top1": .5, "policy_nll": 1 + quartile * .1,
                         })
             plot_main(["--output-dir", str(directory)])
+            drift_svg = (directory / "figures" / "human_vs_selfplay_drift.svg").read_text()
+            self.assertIn("matched openings", drift_svg)
+            self.assertIn("100_plus", drift_svg)
+            self.assertNotIn(">0_10<", drift_svg)
+            self.assertIn("-0.020", drift_svg)
             for filename in (
                 "layerwise_decodability.svg", "context_length.svg",
                 "human_vs_selfplay_drift.svg", "cross_replay.svg",

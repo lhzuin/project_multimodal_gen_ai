@@ -497,6 +497,7 @@ def _load_probe_ensemble(config, model_id, condition, architecture, device):
         probe = StateProbe(hidden_dim=512 if architecture == "mlp" else None)
         probe.load_state_dict(checkpoint["state_dict"], strict=True)
         probe.eval().to(device)
+        probe.requires_grad_(False)
         probes.append(probe)
     return probes, mean, std
 
@@ -620,6 +621,7 @@ def _stream_full_teacher(config, split_rows, bloom, policy, device, destination)
     return done
 
 
+@torch.inference_mode()
 def _evaluate_selfplay(config, models, bloom, device):
     trajectory_path = output_dir(config) / "selfplay_trajectories.jsonl"
     tokenizer = models[MODEL_IDS[0]].decoder.tokenizer
@@ -651,6 +653,7 @@ def _evaluate_selfplay(config, models, bloom, device):
             activations = extract_condition_batch(
                 model, histories, initial_turn, device,
                 batch_size=int(config["extraction"]["batch_size"]),
+                requested_conditions=("final_w256",),
             )["final_w256"].astype(np.float32)
             probes, mean, std = ensembles[encoded_by]
             for offset in range(0, len(activations), int(config["probe"]["batch_size"])):
@@ -843,19 +846,31 @@ def _drift_bootstrap(rows, config):
 
 
 def _trajectory_gap_bootstrap(rows, config):
-    units = defaultdict(lambda: defaultdict(lambda: {"human": [0.0, 0], "selfplay": [0.0, 0]}))
+    # Pair absolute plies within each opening before aggregating. Otherwise the
+    # human opening bucket includes the easy prefix absent from self-play, and
+    # different termination lengths change the position mix within later bands.
+    positions = defaultdict(lambda: defaultdict(dict))
     metrics = ("board_nll", "occupied_nll", "board_hamming")
     for row in rows:
         if row["condition"] != "final_w256":
             continue
         source = row["trajectory_source"]
-        sources = MODEL_IDS if source == "human" else (source,)
-        for trajectory_source in sources:
-            for metric in metrics:
-                label = "human" if source == "human" else "selfplay"
-                value = units[(trajectory_source, row["encoded_by"], row["bucket"], metric)][int(row["unit_id"])][label]
-                value[0] += float(row[metric])
-                value[1] += 1
+        key = (int(row["unit_id"]), row["encoded_by"])
+        positions[key][source][int(row["ply"])]=row
+    units = defaultdict(lambda: defaultdict(lambda: {"human": [0.0, 0], "selfplay": [0.0, 0]}))
+    for (opening, encoded_by), by_source in positions.items():
+        human = by_source.get("human", {})
+        for source in MODEL_IDS:
+            selfplay = by_source.get(source, {})
+            for ply in sorted(human.keys() & selfplay.keys()):
+                human_row, selfplay_row = human[ply], selfplay[ply]
+                if human_row["bucket"] != selfplay_row["bucket"]:
+                    raise ValueError("absolute-ply bucket mismatch in trajectory gap")
+                for metric in metrics:
+                    value = units[(source, encoded_by, human_row["bucket"], metric)][opening]
+                    for label, row in (("human", human_row), ("selfplay", selfplay_row)):
+                        value[label][0] += float(row[metric])
+                        value[label][1] += 1
     rng = np.random.default_rng(int(config["bootstrap"]["seed"]))
     replicates = int(config["bootstrap"]["replicates"])
     output = []
@@ -978,12 +993,25 @@ def stage_evaluate(config: dict, resume: bool, device: torch.device) -> None:
     existing_manifest = (json.loads(existing_manifest_path.read_text(encoding="utf-8"))
                          if existing_manifest_path.exists() else {})
     reuse = resume and existing_manifest.get("signature") == evaluation_signature
+    components = dict(existing_manifest.get("component_sha256", {})) if reuse else {}
+
+    def reusable(path):
+        return (reuse and path.exists()
+                and (existing_manifest.get("complete")
+                     or components.get(path.name) == sha256(path)))
+
+    def save_component(path):
+        components[path.name] = sha256(path)
+        atomic_json(existing_manifest_path, {
+            "complete": False, "signature": evaluation_signature,
+            "component_sha256": components,
+        })
     all_test_games = {int(row["game_id"]) for row in split_rows if row["split"] == "test"}
     selected_test_games = {int(row["game_id"]) for row in split_rows
                            if row["split"] == "test" and int(row["selected"])}
     policy = _policy_lookup(config, all_test_games)
     bloom = _novelty_index(config)
-    if not (reuse and diagnostic_destination.exists()):
+    if not reusable(diagnostic_destination):
         diagnostic_rows = []
         for model_id in MODEL_IDS:
             for condition in CONDITIONS:
@@ -998,22 +1026,25 @@ def stage_evaluate(config: dict, resume: bool, device: torch.device) -> None:
                         result_condition="final_w256_mlp",
                     ))
         write_csv(diagnostic_destination, diagnostic_rows, RESULT_FIELDS)
+        save_component(diagnostic_destination)
     else:
         print("evaluate: reusing teacher diagnostic rows", flush=True)
     diagnostic_rows = read_csv(diagnostic_destination)
-    if not (reuse and destination.exists()):
+    if not reusable(destination):
         if config.get("evaluation", {}).get("full_test_pool", True):
             _stream_full_teacher(config, split_rows, bloom, policy, device, destination)
         else:
             write_csv(destination,
                       (row for row in diagnostic_rows if row["condition"] == "final_w256"),
                       RESULT_FIELDS)
+        save_component(destination)
     else:
         print("evaluate: reusing primary teacher rows", flush=True)
-    if not (reuse and selfplay_destination.exists()):
+    if not reusable(selfplay_destination):
         models = load_decoders(config, device)
         selfplay_rows = _evaluate_selfplay(config, models, bloom, device)
         write_csv(selfplay_destination, selfplay_rows, RESULT_FIELDS)
+        save_component(selfplay_destination)
     else:
         print("evaluate: reusing self-play rows", flush=True)
         selfplay_rows = read_csv(selfplay_destination)
@@ -1055,6 +1086,7 @@ def stage_evaluate(config: dict, resume: bool, device: torch.device) -> None:
         "bootstrap_unit_teacher": "complete game", "bootstrap_unit_selfplay": "opening",
         "bootstrap_replicates": int(config["bootstrap"]["replicates"]),
         "signature": evaluation_signature,
+        "component_sha256": components,
     })
 
 

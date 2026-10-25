@@ -371,6 +371,9 @@ def parse_args(argv=None):
     parser.add_argument("--sample-games-per-issue", type=int, default=None,
                         help="Exploratory run: select this many hash-ranked games from each issue.")
     parser.add_argument("--overwrite", action="store_true")
+    parser.add_argument("--resume-csv", type=Path, action="append", help="Frozen partial per_move.csv; repeat to merge sources, first source wins whole-game overlaps.")
+    parser.add_argument("--resume-source", type=Path, action="append", help="Matching provenance JSON for each resume-csv, in the same order.")
+    parser.add_argument("--resume-code-review", type=Path, help="Local reviewed source equivalence receipt for explicitly inspected source differences.")
     return parser.parse_args(argv)
 
 
@@ -382,6 +385,16 @@ def main(argv=None):
         raise ValueError("max-games must be positive")
     if args.max_games is not None and args.sample_games_per_issue is not None:
         raise ValueError("max-games and sample-games-per-issue cannot be combined")
+    if bool(args.resume_csv) != bool(args.resume_source):
+        raise ValueError("resume-csv and resume-source must be supplied together")
+    if args.resume_csv and len(args.resume_csv) != len(args.resume_source):
+        raise ValueError("each resume-csv needs a matching resume-source")
+    if args.resume_csv and len({p.resolve() for p in args.resume_csv}) != len(args.resume_csv):
+        raise ValueError("duplicate resume CSV paths")
+    if args.resume_csv and (args.max_games is not None or args.sample_games_per_issue is not None):
+        raise ValueError("recovery requires a full-corpus evaluation, without sampling/game caps")
+    if args.resume_csv and args.overwrite:
+        raise ValueError("recovery requires a fresh output directory; overwrite could destroy the source CSV")
     device_name = args.device
     if device_name == "auto":
         device_name = "cuda" if torch.cuda.is_available() else (
@@ -421,11 +434,45 @@ def main(argv=None):
     progress_started = time.monotonic()
     started = datetime.now(timezone.utc)
     per_move = args.output_dir / "per_move.csv"
+    recovered_ids = set()
+    resume_proof = None
+    resume_discarded = []
+    resume_segments = []
+    if args.resume_csv:
+        from analysis.ply_comparison.resume import verify_source
+        resume_proof = [verify_source(csv_path, proof_path,
+                                     {"pgn": args.pgn, "tokenizer": args.tokenizer, **CHECKPOINTS},
+                                     code_review=args.resume_code_review)
+                        for csv_path, proof_path in zip(args.resume_csv, args.resume_source)]
+        print("All source CSVs, corpus, checkpoints, tokenizer and scoring code match; rebuilding completed-game statistics.", flush=True)
     with args.pgn.open("rb") as source, per_move.open("w", encoding="utf-8", newline="") as output:
         writer = csv.DictWriter(output, fieldnames=PER_MOVE_FIELDS)
         writer.writeheader()
+        if args.resume_csv:
+            from analysis.ply_comparison.resume import recover
+            for csv_path in args.resume_csv:
+                print(f"Validating and recovering {csv_path}", flush=True)
+                imported = recover(csv_path, pgn_path=args.pgn, index=index,
+                                   fields=PER_MOVE_FIELDS, writer=writer, accumulator=accumulator,
+                                   relative_accumulator=relative_accumulator, skip_game_ids=recovered_ids,
+                                   progress=lambda count, gid: print(f"Recovery: validated {count} complete games through ID {gid}", flush=True))
+                added = len(imported["game_ids"])
+                resume_segments.append({"csv": str(csv_path.resolve()), "added_games": added,
+                    "duplicate_games_skipped": len(imported["validated_game_ids"]) - added,
+                    "discarded_final_games": imported["discarded_final_games"]})
+                recovered_ids.update(imported["game_ids"])
+                resume_discarded.extend(imported["discarded_final_games"])
+                issue_counts.update(imported["issue_counts"])
+                date_counts.update(imported["date_counts"])
+                early_state_hashes.update(imported["early_hashes"])
+                early_state_occurrences += imported["early_occurrences"]
+            accepted_games = processed_games = len(recovered_ids)
+            progress_started = time.monotonic()
+            print(f"Recovered {len(recovered_ids)}/{expected_games} complete games; discarded partial final games {resume_discarded}.", flush=True)
         for game_row in index["games"]:
             game_id = int(game_row["idx"])
+            if game_id in recovered_ids:
+                continue
             if selected_game_ids is not None and game_id not in selected_game_ids:
                 continue
             source.seek(int(game_row["start"]))
@@ -457,7 +504,7 @@ def main(argv=None):
             processed_games += 1
             if processed_games % 100 == 0 or accepted_games == progress_target:
                 elapsed = time.monotonic() - progress_started
-                rate = processed_games / elapsed if elapsed > 0 else 0.0
+                rate = (processed_games - len(recovered_ids)) / elapsed if elapsed > 0 else 0.0
                 remaining = max(0, progress_target - (accepted_games if args.max_games is not None else processed_games))
                 eta = remaining / rate if rate > 0 else float("inf")
                 eta_text = f"{eta / 60:.1f} min" if math.isfinite(eta) else "unknown"
@@ -534,6 +581,15 @@ def main(argv=None):
             "paired_delta": "balanced minus baseline; game-cluster percentile bootstrap",
         },
     }
+    if resume_proof is not None:
+        manifest["resume"] = {"source_csv": [str(p.resolve()) for p in args.resume_csv],
+                              "source_provenance": resume_proof,
+                              "segments": resume_segments,
+                              "duplicate_policy": "First source owns the complete game for all four models; no duplicate decisions are counted.",
+                              "recovered_games": len(recovered_ids),
+                              "discarded_final_games": resume_discarded,
+                              "new_inference_device": str(device),
+                              "note": "Rows were evaluated on multiple computers; device/software metadata above describe new inference, with source metadata retained here."}
     audit_path = args.pgn.with_name("twic_1662_1667_corpus_audit.json")
     if audit_path.exists():
         audit = json.loads(audit_path.read_text(encoding="utf-8"))
