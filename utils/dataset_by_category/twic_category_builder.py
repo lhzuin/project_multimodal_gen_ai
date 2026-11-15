@@ -12,11 +12,11 @@ import argparse
 from collections import Counter
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
+import hashlib
 import io
 import json
 import os
 from pathlib import Path
-import tempfile
 import time
 from typing import Any, Iterable, Mapping, Protocol, Sequence, TextIO
 import urllib.error
@@ -160,7 +160,7 @@ class HttpIssueDownloader:
 class BuildConfig:
     """Configuration for one category-dataset build."""
 
-    target_plies: int
+    target_plies: int | None
     categories: tuple[Category, ...]
     output_dir: Path = DEFAULT_OUTPUT_DIR
     prefix: str = DEFAULT_PREFIX
@@ -169,6 +169,7 @@ class BuildConfig:
     start_week: int = DEFAULT_START_WEEK
     lower_week: int = DEFAULT_LOWER_WEEK
     overwrite: bool = False
+    all_games_in_range: bool = False
 
     def __post_init__(self) -> None:
         normalized = tuple(dict.fromkeys(category.casefold() for category in self.categories))
@@ -177,8 +178,11 @@ class BuildConfig:
             raise ValueError(f"invalid categories: {', '.join(invalid)}")
         if not normalized:
             raise ValueError("at least one category is required")
-        if self.target_plies <= 0:
-            raise ValueError("target_plies must be positive")
+        if self.all_games_in_range:
+            if self.target_plies is not None:
+                raise ValueError("omit target_plies with --all-games-in-range")
+        elif self.target_plies is None or self.target_plies <= 0:
+            raise ValueError("target_plies must be positive unless all_games_in_range is set")
         if self.min_elo is not None and self.min_elo < 0:
             raise ValueError("min_elo cannot be negative")
         if self.start_week < self.lower_week:
@@ -203,6 +207,7 @@ class WeekStats:
     source_url: str | None = None
     download_attempts: int = 0
     download_size_bytes: int = 0
+    download_sha256: str | None = None
     games_seen: int = 0
     games_written: dict[str, int] = field(default_factory=dict)
     plies_written: dict[str, int] = field(default_factory=dict)
@@ -266,6 +271,7 @@ class TWICCategoryDatasetBuilder:
         self.stats = {category: CategoryStats() for category in config.categories}
         self.week_stats: list[WeekStats] = []
         self.started_at = datetime.now(timezone.utc)
+        self._seen_games: set[bytes] = set()
 
     def _paths(self) -> tuple[dict[Category, Path], dict[Category, Path], Path, Path]:
         output = self.config.output_dir.resolve()
@@ -279,7 +285,32 @@ class TWICCategoryDatasetBuilder:
         return pgns, indexes, report_json, report_md
 
     def _all_targets_reached(self) -> bool:
+        if self.config.all_games_in_range:
+            return False
         return all(stat.plies >= self.config.target_plies for stat in self.stats.values())
+
+    def _range_complete(self) -> bool:
+        return self.config.all_games_in_range and all(
+            stat.status == "processed" for stat in self.week_stats
+        ) and len(self.week_stats) == self.config.start_week - self.config.lower_week + 1
+
+    @staticmethod
+    def _game_digest(game: chess.pgn.Game) -> bytes:
+        digest = hashlib.blake2b(digest_size=16, person=b"twic-eval-game")
+        digest.update(game.board().fen().encode("ascii"))
+        digest.update(b"\0")
+        for move in game.mainline_moves():
+            digest.update(move.uci().encode("ascii"))
+            digest.update(b" ")
+        return digest.digest()
+
+    @staticmethod
+    def _file_sha256(path: Path) -> str:
+        digest = hashlib.sha256()
+        with path.open("rb") as source:
+            for chunk in iter(lambda: source.read(1 << 20), b""):
+                digest.update(chunk)
+        return digest.hexdigest()
 
     def _validate_destinations(self, destinations: Iterable[Path]) -> None:
         existing = [path for path in destinations if path.exists()]
@@ -326,7 +357,7 @@ class TWICCategoryDatasetBuilder:
                 week.skipped["unselected_category"] += 1
                 continue
             category_stats = self.stats[category]
-            if category_stats.plies >= self.config.target_plies:
+            if not self.config.all_games_in_range and category_stats.plies >= self.config.target_plies:
                 week.skipped["category_target_already_reached"] += 1
                 continue
 
@@ -334,6 +365,16 @@ class TWICCategoryDatasetBuilder:
             if plies == 0:
                 week.skipped["zero_plies"] += 1
                 continue
+            if self.config.all_games_in_range:
+                if any(move == chess.Move.null() for move in game.mainline_moves()):
+                    week.skipped["null_move"] += 1
+                    continue
+                digest = self._game_digest(game)
+                if digest in self._seen_games:
+                    week.skipped["duplicate_game"] += 1
+                    continue
+                self._seen_games.add(digest)
+                game.headers["TWICIssue"] = str(week.issue)
 
             # A python-chess exporter is stateful and must not be reused across
             # games; reuse would prepend earlier games to later outputs.
@@ -364,6 +405,10 @@ class TWICCategoryDatasetBuilder:
                     with io.TextIOWrapper(binary_source, encoding="utf-8", errors="replace", newline=None) as source:
                         if not self._process_stream(source, outputs, week):
                             week.skipped["abandoned_member_after_parser_exception"] += 1
+                            if self.config.all_games_in_range:
+                                raise DownloadError(
+                                    f"cannot certify a complete range: abandoned PGN member {member}"
+                                )
 
     def _make_report(
         self,
@@ -377,9 +422,9 @@ class TWICCategoryDatasetBuilder:
             index = load_pgn_offsets(str(index_paths[category]))
             categories[category] = {
                 "target_plies": self.config.target_plies,
-                "target_reached": stat.plies >= self.config.target_plies,
+                "target_reached": self._range_complete() if self.config.all_games_in_range else stat.plies >= self.config.target_plies,
                 "plies": stat.plies,
-                "overshoot_plies": max(0, stat.plies - self.config.target_plies),
+                "overshoot_plies": 0 if self.config.all_games_in_range else max(0, stat.plies - self.config.target_plies),
                 "games": stat.games,
                 "indexed_games": index["num_games"],
                 "source_weeks": sorted(stat.source_weeks, reverse=True),
@@ -402,7 +447,8 @@ class TWICCategoryDatasetBuilder:
             "finished_at_utc": finished_at.isoformat(),
             "duration_seconds": (finished_at - self.started_at).total_seconds(),
             "config": config,
-            "all_targets_reached": self._all_targets_reached(),
+            "all_targets_reached": self._range_complete() if self.config.all_games_in_range else self._all_targets_reached(),
+            "range_complete": self._range_complete() if self.config.all_games_in_range else None,
             "categories": categories,
             "weeks": weeks,
             "failed_weeks": [stat.issue for stat in self.week_stats if stat.status == "download_failed"],
@@ -464,8 +510,8 @@ class TWICCategoryDatasetBuilder:
                 category: path.open("w", encoding="utf-8", newline="\n")
                 for category, path in temporary_pgns.items()
             }
-            with tempfile.TemporaryDirectory(prefix="twic_category_") as temporary_dir:
-                archive_path = Path(temporary_dir) / "current_week.zip"
+            archive_path = self.config.output_dir / f".twic_current_week_{token}.zip"
+            try:
                 for issue in range(self.config.start_week, self.config.lower_week - 1, -1):
                     if self._all_targets_reached():
                         break
@@ -477,6 +523,7 @@ class TWICCategoryDatasetBuilder:
                         week.source_url = receipt.url
                         week.download_attempts = receipt.attempts
                         week.download_size_bytes = receipt.size_bytes
+                        week.download_sha256 = self._file_sha256(archive_path)
                     except Exception as exc:
                         week.status = "download_failed"
                         week.error = str(exc)
@@ -487,8 +534,9 @@ class TWICCategoryDatasetBuilder:
                         self._process_archive(archive_path, outputs, week)
                         week.status = "processed"
                         progress = ", ".join(
-                            f"{category}={stat.plies}/{self.config.target_plies}"
-                            for category, stat in self.stats.items()
+                            f"{category}={stat.plies}" + (
+                                "" if self.config.all_games_in_range else f"/{self.config.target_plies}"
+                            ) for category, stat in self.stats.items()
                         )
                         print(f"[TWIC {issue}] processed ({progress})")
                     except (OSError, zipfile.BadZipFile, DownloadError) as exc:
@@ -497,6 +545,8 @@ class TWICCategoryDatasetBuilder:
                         print(f"[TWIC {issue}] archive processing failed: {exc}")
                     finally:
                         archive_path.unlink(missing_ok=True)
+            finally:
+                archive_path.unlink(missing_ok=True)
 
             for output in outputs.values():
                 output.flush()
@@ -509,7 +559,7 @@ class TWICCategoryDatasetBuilder:
 
             warnings: list[str] = []
             for category, stat in self.stats.items():
-                if stat.plies < self.config.target_plies:
+                if not self.config.all_games_in_range and stat.plies < self.config.target_plies:
                     warnings.append(
                         f"{category} reached {stat.plies:,}/{self.config.target_plies:,} plies "
                         f"before the inclusive lower week {self.config.lower_week}."
@@ -535,7 +585,7 @@ class TWICCategoryDatasetBuilder:
                 report_json_path=report_json_path,
                 report_markdown_path=report_markdown_path,
                 target_reached={
-                    category: stat.plies >= self.config.target_plies
+                    category: self._range_complete() if self.config.all_games_in_range else stat.plies >= self.config.target_plies
                     for category, stat in self.stats.items()
                 },
                 plies={category: stat.plies for category, stat in self.stats.items()},
@@ -563,7 +613,8 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Build training-ready Blitz/Rapid/Classic corpora from TWIC issues."
     )
-    parser.add_argument("target_plies", type=int, help="Minimum plies to collect per selected category.")
+    parser.add_argument("target_plies", type=int, nargs="?", help="Minimum plies to collect per selected category.")
+    parser.add_argument("--all-games-in-range", action="store_true", help="Include all qualifying games from every issue in the inclusive range.")
     parser.add_argument(
         "--categories", nargs="+", type=_category, required=True,
         help="One or more of: blitz rapid classic.",
@@ -597,6 +648,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         start_week=args.start_week,
         lower_week=args.lower_week,
         overwrite=args.overwrite,
+        all_games_in_range=args.all_games_in_range,
     )
     downloader = HttpIssueDownloader(
         url_templates=tuple(args.url_template) if args.url_template else DEFAULT_URL_TEMPLATES,

@@ -56,13 +56,24 @@ class ChessDecoderPlayer(nn.Module):
         if use_turn_embed:
             self.turn_emb = nn.Embedding(2, model_dim)  # 0 white, 1 black
 
-    def forward(self, input_ids, attention_mask=None, start_turn=None, piece_input_ids=None):
+    def forward(
+        self, input_ids, attention_mask=None, start_turn=None,
+        piece_input_ids=None, capture_layers=None,
+    ):
         """
         input_ids: [B,T]
         start_turn: [B] 0/1 (optional)
         returns logits: [B,T,V]
         """
-        h = self.decoder(input_ids=input_ids, attention_mask=attention_mask, piece_input_ids=piece_input_ids)  # [B,T,D]
+        decoder_output = self.decoder(
+            input_ids=input_ids, attention_mask=attention_mask,
+            piece_input_ids=piece_input_ids, capture_layers=capture_layers,
+        )
+        if capture_layers is None:
+            h = decoder_output
+            captured = None
+        else:
+            h, captured = decoder_output
 
         if self.use_turn_embed and start_turn is not None:
             B, T, D = h.shape
@@ -72,7 +83,15 @@ class ChessDecoderPlayer(nn.Module):
 
         move_logits = self.lm_head(h)            # [B,T,Vmove]
         piece_logits = self.piece_head(h)        # [B,T,Vpiece]
-        return {"logits": move_logits, "piece_logits": piece_logits}
+        result = {"logits": move_logits, "piece_logits": piece_logits}
+        if captured is not None:
+            # The final captured state is exactly the normalized, turn-adjusted
+            # representation consumed by both policy heads. Earlier captures
+            # are the outputs of their numbered transformer blocks.
+            if len(self.decoder.layers) in captured:
+                captured[len(self.decoder.layers)] = h
+            result["hidden_states"] = captured
+        return result
 
     # ---------- Legal mask over vocab ----------
     def legal_token_mask_from_fen(self, fen_list, device=None):
