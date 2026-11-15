@@ -31,7 +31,6 @@ import os
 import random
 import sys
 import time
-import shutil
 import torch
 from dataclasses import dataclass, asdict
 from typing import Any, Dict, List, Optional, Tuple
@@ -172,7 +171,8 @@ def launch_model_uci_engine(args) -> chess.engine.SimpleEngine:
            "--ckpt", args.ckpt,
            "--device", device,
            "--temperature", str(args.temperature),
-           "--topk", str(args.topk)]
+           "--topk", str(args.topk),
+           "--n_layers", str(args.n_layers)]
     if args.greedy:
         cmd.append("--greedy")
     
@@ -183,8 +183,7 @@ def launch_model_uci_engine(args) -> chess.engine.SimpleEngine:
         if not args.tokenizer_path:
             raise SystemExit("--tokenizer_path is required for decoder model_type.")
         cmd += ["--tokenizer_path", args.tokenizer_path,
-                "--max_seq_len", str(args.max_seq_len),
-                "--n_layers", str(args.n_layers)]
+                "--max_seq_len", str(args.max_seq_len)]
     else:
         cmd += ["--img_size", str(args.img_size)]
         if args.vit_path:
@@ -567,7 +566,8 @@ class TournamentSummary:
     model_config: Dict[str, Any]
 
 
-def run_tournament(args) -> Tuple[TournamentSummary, List[PlayedGame]]:
+def select_openings(args):
+    """Shared seeded sampling protocol for sequential and async runners."""
     suite = _load_json(args.openings_json)
     if not isinstance(suite, list) or not suite:
         raise SystemExit("Opening suite JSON must be a non-empty list.")
@@ -581,6 +581,12 @@ def run_tournament(args) -> Tuple[TournamentSummary, List[PlayedGame]]:
     rng.shuffle(indices)
     sel_idx = indices[:n_sample]
     selected = [(i, suite[i]) for i in sel_idx]
+    return n_total, pct, selected
+
+
+def run_tournament(args) -> Tuple[TournamentSummary, List[PlayedGame]]:
+    n_total, pct, selected = select_openings(args)
+    n_sample = len(selected)
 
     # Engines
     limit = _limit_from_args(args)
@@ -602,7 +608,7 @@ def run_tournament(args) -> Tuple[TournamentSummary, List[PlayedGame]]:
     try:
         for j, (idx, entry) in enumerate(selected):
             opening_id = _opening_id(entry, idx)
-            start_fen = _pick_fen(entry)
+            _pick_fen(entry)
 
             # paired games
             for model_is_white in (True, False):
@@ -640,6 +646,15 @@ def run_tournament(args) -> Tuple[TournamentSummary, List[PlayedGame]]:
         except Exception:
             pass
 
+    return build_summary(args, n_total, n_sample, pct, played), played
+
+
+def build_summary(args, n_total, n_sample, pct, played) -> TournamentSummary:
+    """Preserve the legacy result mapping, score formula and summary fields."""
+    scores = [_score_from_result(g.result, g.model_color == "white") for g in played]
+    wins = scores.count(1.0)
+    draws = scores.count(0.5)
+    losses = scores.count(0.0)
     n_games = len(played)
     score = (wins + 0.5 * draws) / max(1, n_games)
 
@@ -686,10 +701,10 @@ def run_tournament(args) -> Tuple[TournamentSummary, List[PlayedGame]]:
         },
     )
 
-    return summary, played
+    return summary
 
 
-def main():
+def build_parser():
     ap = argparse.ArgumentParser()
     ap.add_argument("--openings_json", required=True, help="Path to opening suite JSON (list of dicts with a FEN field).")
     ap.add_argument("--pct", type=float, default=1.0, help="Fraction of openings to sample, in [0,1].")
@@ -710,7 +725,7 @@ def main():
     ap.add_argument("--max_plies", type=int, default=400, help="Safety cap on game length.")
 
     # Model UCI engine wrapper
-    ap.add_argument("--model_uci_py", default="tournament_uci_engine_patched.py", help="Path to your UCI wrapper script.")
+    ap.add_argument("--model_uci_py", default="utils/tournament_uci_engine.py", help="Path to the model UCI wrapper script.")
     ap.add_argument("--python", default=sys.executable, help="Python executable to run the model UCI engine.")
     ap.add_argument("--model_type", choices=["decoder", "encoder"], required=True)
     ap.add_argument("--ckpt", required=True)
@@ -734,12 +749,11 @@ def main():
     ap.add_argument("--out_dir", default="tournament_out")
     ap.add_argument("--write_pgn", action="store_true")
     ap.add_argument("--verbose", action="store_true")
+    return ap
 
-    args = ap.parse_args()
-    _ensure_dir(args.out_dir)
 
-    summary, games = run_tournament(args)
-
+def write_outputs(args, summary, games):
+    """Write the original summary, JSONL and optional PGN formats."""
     # Write summary + raw games
     summary_path = os.path.join(args.out_dir, "summary.json")
     with open(summary_path, "w", encoding="utf-8") as f:
@@ -768,6 +782,13 @@ def main():
     print(f"Saved: {games_path}")
     if args.write_pgn:
         print(f"Saved: {os.path.join(args.out_dir, 'games.pgn')}")
+
+
+def main():
+    args = build_parser().parse_args()
+    _ensure_dir(args.out_dir)
+    summary, games = run_tournament(args)
+    write_outputs(args, summary, games)
 
 
 if __name__ == "__main__":
