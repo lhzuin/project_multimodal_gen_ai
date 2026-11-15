@@ -176,7 +176,15 @@ class PGNMoveDataset(Dataset):
             "piece_ids": torch.tensor(piece_ids, dtype=torch.long),
             "start_turn": torch.tensor(start_turn, dtype=torch.long),
             "loss_mask": torch.from_numpy(label_loss_mask.copy()).bool(),
+            **self._additional_item_fields(game, window_start, len(move_ids)),
         }
+
+    def _additional_item_fields(self, game, first_token_index: int, token_count: int):
+        """Extend targets aligned to unshifted inputs; the base adds no fields.
+
+        Absolute token zero is BOS; token k >= 1 represents move k - 1.
+        """
+        return {}
 
     def __getitem__(self, idx: int):
         if self.balanced_plan is not None:
@@ -199,6 +207,7 @@ class PGNMoveDataset(Dataset):
             print(f"Encoding error in game idx={idx}, skipping")
             return {"valid": False}
 
+        start = 0
         # optional: sample a fixed-length window (block_size)
         if self.block_size is not None:
             # we need at least 2 tokens to make (x,y)
@@ -235,4 +244,5 @@ class PGNMoveDataset(Dataset):
             "move_ids": torch.tensor(move_ids, dtype=torch.long),
             "piece_ids": torch.tensor(piece_ids, dtype=torch.long),
             "start_turn": torch.tensor(start_turn, dtype=torch.long),
+            **self._additional_item_fields(game, start, len(move_ids)),
         }

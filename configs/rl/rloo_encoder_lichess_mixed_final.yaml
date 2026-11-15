@@ -1,0 +1,64 @@
+# Encoder RLOO with early-game anchors and a 20-ply reward horizon.
+database:
+  manifest: processed_games/rl/lichess_mixed_final/train.json
+checkpoint_path: checkpoints/chess_encoder_seq_balanced_v1.best.pt
+model_type: encoder
+model_kwargs:
+  version: 2
+  img_size: 256
+  encoder_dim: 256
+  n_heads: 4
+  n_layers: 8
+  ep_embed_dim: 16
+  piece_embed_dim: 32
+server:
+  mode: local
+  opponent:
+    executable: stockfish
+    workers: 3
+    threads_per_engine: 1
+    hash_mb_per_engine: 64
+    limit_strength: false
+    uci_elo: null
+    default_limit:
+      nodes: 30000
+    clear_hash_before_search: true
+  evaluator:
+    executable: stockfish
+    workers: 1
+    threads_per_engine: 1
+    hash_mb_per_engine: 128
+    default_limit:
+      nodes: 100000
+    clear_hash_before_search: true
+rloo:
+  training_batch_size: 64
+  rollouts_per_entry: 4
+  max_concurrent_games: 8
+  sampling_batch_size: 2
+  micro_batch_size: 1
+  ply_depth: 20
+  randomize_policy_color: false
+  temperature: 0.8
+  learning_rate: 2.0e-06
+  kl_beta: 0.2
+  reward_mode: tanh
+  reward_scale_cp: 400.0
+  max_grad_norm: 1.0
+  device: auto
+  seed: 42
+epochs: 2
+save_every_batches: 10
+output_checkpoint: checkpoints/rloo_encoder_balanced_v1_lichess_mixed_final.latest.pt
+export_weights: checkpoints/rloo_encoder_balanced_v1_lichess_mixed_final.pt
+logging:
+  stdout: true
+  jsonl_path: logs/rloo_encoder_lichess_mixed_final.metrics.jsonl
+  wandb:
+    enabled: true
+    project: chess_vision
+    name: rloo_encoder_lichess_mixed_final
+    mode: online
+    offline_fallback: true
+    init_timeout_s: 30
+export_every_batches: 25

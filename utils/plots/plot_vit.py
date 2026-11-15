@@ -1,3 +1,4 @@
+"""Plot clean/augmented vision error rates from a training-history CSV."""
 import pandas as pd
 import matplotlib.pyplot as plt
 from matplotlib.ticker import MaxNLocator, FuncFormatter, LogLocator, NullFormatter
@@ -7,9 +8,6 @@ import numpy as np
 # ============================================================
 # Configuration
 # ============================================================
-CSV_PATH = "/Users/luiszuin/Desktop/Polytechnique/3AP2/multimodal_gen_ai/chess_classifier_vit_v2_stats_history.csv"
-OUT_PNG = "vit_error_rate_evolution.png"
-OUT_PDF = "vit_error_rate_evolution.pdf"
 
 # Poster-inspired colors (same palette as previous plot)
 COLOR_BLUE = "#0B4F7D"
@@ -25,179 +23,195 @@ COLOR_BG = "#FFFFFF"
 # stage, epoch, epoch_progress, tag, train_loss, train_acc,
 # val_loss_noaug, val_acc_noaug, val_loss_aug, val_acc_aug
 # ============================================================
-df = pd.read_csv(CSV_PATH)
 
-# Clean column names
-df.columns = [str(c).strip() for c in df.columns]
+def main(argv=None):
+    import argparse
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--input", type=Path, required=True)
+    parser.add_argument("--output-dir", type=Path, default=Path("outputs/figures/vision"))
+    parser.add_argument("--show", action="store_true")
+    args = parser.parse_args(argv)
+    args.output_dir.mkdir(parents=True, exist_ok=True)
 
-required_cols = ["epoch_progress", "val_acc_noaug", "val_acc_aug"]
-missing = [c for c in required_cols if c not in df.columns]
-if missing:
-    raise ValueError(f"Missing required columns: {missing}")
+    df = pd.read_csv(args.input)
 
-# Keep only rows with validation values
-df = df.dropna(subset=required_cols).copy()
+    # Clean column names
+    df.columns = [str(c).strip() for c in df.columns]
 
-# Sort by training progression
-df = df.sort_values("epoch_progress")
+    required_cols = ["epoch_progress", "val_acc_noaug", "val_acc_aug"]
+    missing = [c for c in required_cols if c not in df.columns]
+    if missing:
+        raise ValueError(f"Missing required columns: {missing}")
 
-# ============================================================
-# X axis: continuous epoch progression
-# Example:
-# 0.333, 0.667, 1.000, 1.333, ...
-# We shift by +1 if you want the plot to visually start at epoch 1
-# ============================================================
-x = df["epoch_progress"].to_numpy()
+    # Keep only rows with validation values
+    df = df.dropna(subset=required_cols).copy()
 
-# If your logs start from epoch 0, but you want the plot labeled from 1:
-x = x + 1
+    # Sort by training progression
+    df = df.sort_values("epoch_progress")
 
-# ============================================================
-# Convert validation accuracy to error rate (%)
-# error_rate = (1 - accuracy) * 100
-# ============================================================
-err_clean = (1.0 - df["val_acc_noaug"].to_numpy()) * 100.0
-err_aug   = (1.0 - df["val_acc_aug"].to_numpy()) * 100.0
+    # ============================================================
+    # X axis: continuous epoch progression
+    # Example:
+    # 0.333, 0.667, 1.000, 1.333, ...
+    # We shift by +1 if you want the plot to visually start at epoch 1
+    # ============================================================
+    x = df["epoch_progress"].to_numpy()
 
-# Avoid log(0) if a value is ever exactly zero
-EPS = 1e-4
-err_clean = np.clip(err_clean, EPS, None)
-err_aug   = np.clip(err_aug, EPS, None)
+    # If your logs start from epoch 0, but you want the plot labeled from 1:
+    x = x + 1
 
-# ============================================================
-# Figure style
-# ============================================================
-plt.rcParams.update({
-    "font.family": "DejaVu Sans",
-    "font.size": 11,
-    "axes.titlesize": 14,
-    "axes.labelsize": 12,
-    "xtick.labelsize": 10.5,
-    "ytick.labelsize": 10.5,
-    "legend.fontsize": 10.5,
-})
+    # ============================================================
+    # Convert validation accuracy to error rate (%)
+    # error_rate = (1 - accuracy) * 100
+    # ============================================================
+    err_clean = (1.0 - df["val_acc_noaug"].to_numpy()) * 100.0
+    err_aug   = (1.0 - df["val_acc_aug"].to_numpy()) * 100.0
 
-fig, ax = plt.subplots(figsize=(7.4, 4.6), dpi=300)
-fig.patch.set_facecolor(COLOR_BG)
-ax.set_facecolor(COLOR_BG)
+    # Avoid log(0) if a value is ever exactly zero
+    EPS = 1e-4
+    err_clean = np.clip(err_clean, EPS, None)
+    err_aug   = np.clip(err_aug, EPS, None)
 
-# ============================================================
-# Curves
-# ============================================================
-line_clean, = ax.plot(
-    x, err_clean,
-    color=COLOR_BLUE,
-    linewidth=2.8,
-    marker="o",
-    markersize=6.2,
-    markerfacecolor=COLOR_BLUE,
-    markeredgecolor="white",
-    markeredgewidth=1.0,
-    label="Clean validation",
-    zorder=3,
-)
+    # ============================================================
+    # Figure style
+    # ============================================================
+    plt.rcParams.update({
+        "font.family": "DejaVu Sans",
+        "font.size": 11,
+        "axes.titlesize": 14,
+        "axes.labelsize": 12,
+        "xtick.labelsize": 10.5,
+        "ytick.labelsize": 10.5,
+        "legend.fontsize": 10.5,
+    })
 
-line_aug, = ax.plot(
-    x, err_aug,
-    color=COLOR_ORANGE,
-    linewidth=2.8,
-    marker="s",
-    markersize=6.0,
-    markerfacecolor=COLOR_ORANGE,
-    markeredgecolor="white",
-    markeredgewidth=1.0,
-    label="Augmented validation",
-    zorder=3,
-)
+    fig, ax = plt.subplots(figsize=(7.4, 4.6), dpi=300)
+    fig.patch.set_facecolor(COLOR_BG)
+    ax.set_facecolor(COLOR_BG)
 
-# ============================================================
-# Axes
-# ============================================================
-ax.set_xlabel("Epoch", weight= "bold")
-ax.set_ylabel("Validation Error Rate (%)", color=COLOR_TEXT, weight="bold")
+    # ============================================================
+    # Curves
+    # ============================================================
+    line_clean, = ax.plot(
+        x, err_clean,
+        color=COLOR_BLUE,
+        linewidth=2.8,
+        marker="o",
+        markersize=6.2,
+        markerfacecolor=COLOR_BLUE,
+        markeredgecolor="white",
+        markeredgewidth=1.0,
+        label="Clean validation",
+        zorder=3,
+    )
 
-# Log scale on y
-ax.set_yscale("log")
+    line_aug, = ax.plot(
+        x, err_aug,
+        color=COLOR_ORANGE,
+        linewidth=2.8,
+        marker="s",
+        markersize=6.0,
+        markerfacecolor=COLOR_ORANGE,
+        markeredgecolor="white",
+        markeredgewidth=1.0,
+        label="Augmented validation",
+        zorder=3,
+    )
 
-# Good x limits
-ax.set_xlim(x.min() - 0.1, x.max() + 0.2)
+    # ============================================================
+    # Axes
+    # ============================================================
+    ax.set_xlabel("Epoch", weight= "bold")
+    ax.set_ylabel("Validation Error Rate (%)", color=COLOR_TEXT, weight="bold")
 
-# Smart y limits with a bit of padding
-ymin = min(err_clean.min(), err_aug.min())
-ymax = max(err_clean.max(), err_aug.max())
-ax.set_ylim(ymin * 0.75, ymax * 1.25)
+    # Log scale on y
+    ax.set_yscale("log")
 
-# Integer epoch ticks
-ax.xaxis.set_major_locator(MaxNLocator(integer=True))
+    # Good x limits
+    ax.set_xlim(x.min() - 0.1, x.max() + 0.2)
 
-# Nice percent formatting
-ax.yaxis.set_major_formatter(FuncFormatter(lambda v, pos: f"{v:.2g}%"))
+    # Smart y limits with a bit of padding
+    ymin = min(err_clean.min(), err_aug.min())
+    ymax = max(err_clean.max(), err_aug.max())
+    ax.set_ylim(ymin * 0.75, ymax * 1.25)
 
-# Minor ticks for log scale
-ax.yaxis.set_minor_locator(LogLocator(base=10.0, subs=np.arange(2, 10) * 0.1))
-ax.yaxis.set_minor_formatter(NullFormatter())
+    # Integer epoch ticks
+    ax.xaxis.set_major_locator(MaxNLocator(integer=True))
 
-# Tick colors
-ax.tick_params(axis="x", colors=COLOR_TEXT)
-ax.tick_params(axis="y", colors=COLOR_TEXT)
+    # Nice percent formatting
+    ax.yaxis.set_major_formatter(FuncFormatter(lambda v, pos: f"{v:.2g}%"))
 
-# Grid: major only to keep it elegant
-ax.grid(True, axis="both", which="major", linestyle="--", linewidth=0.8, color=COLOR_GRID, alpha=0.9)
-ax.grid(True, axis="y", which="minor", linestyle=":", linewidth=0.5, color=COLOR_GRID, alpha=0.55)
-ax.set_axisbelow(True)
+    # Minor ticks for log scale
+    ax.yaxis.set_minor_locator(LogLocator(base=10.0, subs=np.arange(2, 10) * 0.1))
+    ax.yaxis.set_minor_formatter(NullFormatter())
 
-# Spines
-for spine in ["top", "bottom", "left", "right"]:
-    ax.spines[spine].set_color(COLOR_SPINE)
-    ax.spines[spine].set_linewidth(1.0)
+    # Tick colors
+    ax.tick_params(axis="x", colors=COLOR_TEXT)
+    ax.tick_params(axis="y", colors=COLOR_TEXT)
 
-# ============================================================
-# Legend
-# ============================================================
-legend = ax.legend(
-    loc="upper right",
-    frameon=True,
-    fancybox=True,
-    framealpha=0.96,
-    borderpad=0.6,
-)
-legend.get_frame().set_edgecolor("#C9D3DC")
-legend.get_frame().set_linewidth(0.9)
+    # Grid: major only to keep it elegant
+    ax.grid(True, axis="both", which="major", linestyle="--", linewidth=0.8, color=COLOR_GRID, alpha=0.9)
+    ax.grid(True, axis="y", which="minor", linestyle=":", linewidth=0.5, color=COLOR_GRID, alpha=0.55)
+    ax.set_axisbelow(True)
 
-# ============================================================
-# Final value annotations
-# ============================================================
-ax.annotate(
-    f"{err_clean[-1]:.3f}%",
-    xy=(x[-1], err_clean[-1]),
-    xytext=(10, 6),
-    textcoords="offset points",
-    ha="right",
-    color=COLOR_BLUE,
-    fontsize=10,
-    weight="bold"
-)
+    # Spines
+    for spine in ["top", "bottom", "left", "right"]:
+        ax.spines[spine].set_color(COLOR_SPINE)
+        ax.spines[spine].set_linewidth(1.0)
 
-ax.annotate(
-    f"{err_aug[-1]:.2f}%",
-    xy=(x[-1], err_aug[-1]),
-    xytext=(10, -14),
-    textcoords="offset points",
-    ha="right",
-    color=COLOR_ORANGE,
-    fontsize=10,
-    weight="bold"
-)
+    # ============================================================
+    # Legend
+    # ============================================================
+    legend = ax.legend(
+        loc="upper right",
+        frameon=True,
+        fancybox=True,
+        framealpha=0.96,
+        borderpad=0.6,
+    )
+    legend.get_frame().set_edgecolor("#C9D3DC")
+    legend.get_frame().set_linewidth(0.9)
 
-# ============================================================
-# Layout and save
-# ============================================================
-plt.tight_layout()
+    # ============================================================
+    # Final value annotations
+    # ============================================================
+    ax.annotate(
+        f"{err_clean[-1]:.3f}%",
+        xy=(x[-1], err_clean[-1]),
+        xytext=(10, 6),
+        textcoords="offset points",
+        ha="right",
+        color=COLOR_BLUE,
+        fontsize=10,
+        weight="bold"
+    )
 
-fig.savefig(OUT_PNG, dpi=300, bbox_inches="tight", facecolor=COLOR_BG)
-fig.savefig(OUT_PDF, bbox_inches="tight", facecolor=COLOR_BG)
+    ax.annotate(
+        f"{err_aug[-1]:.2f}%",
+        xy=(x[-1], err_aug[-1]),
+        xytext=(10, -14),
+        textcoords="offset points",
+        ha="right",
+        color=COLOR_ORANGE,
+        fontsize=10,
+        weight="bold"
+    )
 
-print(f"Saved: {Path(OUT_PNG).resolve()}")
-print(f"Saved: {Path(OUT_PDF).resolve()}")
+    # ============================================================
+    # Layout and save
+    # ============================================================
+    plt.tight_layout()
 
-plt.show()
+    fig.savefig(args.output_dir / "vision_evolution.png", dpi=300, bbox_inches="tight", facecolor=COLOR_BG)
+    fig.savefig(args.output_dir / "vision_evolution.pdf", bbox_inches="tight", facecolor=COLOR_BG)
+
+    print(f"Saved figures to {args.output_dir.resolve()}")
+
+
+    if args.show:
+        plt.show()
+    plt.close(fig)
+
+
+if __name__ == "__main__":
+    main()

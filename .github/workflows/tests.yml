@@ -1,0 +1,33 @@
+name: Tests
+on: [push, pull_request]
+permissions:
+  contents: read
+jobs:
+  regression:
+    runs-on: ubuntu-latest
+    env:
+      OMP_NUM_THREADS: "1"
+      MKL_NUM_THREADS: "1"
+      MPLBACKEND: Agg
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y stockfish libcairo2
+          python -m pip install torch --index-url https://download.pytorch.org/whl/cpu
+          python -m pip install -r requirements-dev.txt
+      - name: Check Python errors
+        run: ruff check analysis dataset models train utils rl_stockfish_service tests scripts
+      - name: Run regression suite
+        run: python -m unittest discover -v
+      - name: Test real Stockfish workers
+        env:
+          RL_STOCKFISH_BIN: /usr/games/stockfish
+        run: python -m unittest rl_stockfish_service.tests.test_engine_integration -v
+      - name: Check submission contents
+        run: python scripts/check_submission.py

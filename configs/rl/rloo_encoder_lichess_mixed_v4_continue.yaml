@@ -1,0 +1,66 @@
+# Optional matched control: resume the 100-step v4 pilot to one full epoch.
+# Keep the original wall-time server and all RLOO settings unchanged.
+# Write to distinct paths so the saved 100-step pilot is preserved.
+database:
+  manifest: processed_games/rl/lichess_mixed_v1/train.json
+checkpoint_path: checkpoints/chess_encoder_seq_balanced_v1.best.pt
+model_type: encoder
+model_kwargs:
+  version: 2
+  img_size: 256
+  encoder_dim: 256
+  n_heads: 4
+  n_layers: 8
+  ep_embed_dim: 16
+  piece_embed_dim: 32
+server:
+  mode: local
+  opponent:
+    executable: stockfish
+    workers: 3
+    threads_per_engine: 1
+    hash_mb_per_engine: 64
+    limit_strength: false
+    uci_elo: null
+    default_limit:
+      movetime_ms: 50
+  evaluator:
+    executable: stockfish
+    workers: 1
+    threads_per_engine: 1
+    hash_mb_per_engine: 128
+    default_limit:
+      nodes: 100000
+rloo:
+  training_batch_size: 32
+  rollouts_per_entry: 4
+  max_concurrent_games: 8
+  sampling_batch_size: 2
+  micro_batch_size: 1
+  ply_depth: 10
+  randomize_policy_color: false
+  temperature: 0.8
+  learning_rate: 2.0e-06
+  kl_beta: 0.1
+  reward_mode: tanh
+  reward_scale_cp: 400.0
+  max_grad_norm: 1.0
+  device: auto
+  seed: 42
+epochs: 1
+max_updates: 313
+save_every_batches: 10
+output_checkpoint: checkpoints/rloo_encoder_balanced_v1_lichess_mixed_v4_continued.latest.pt
+export_weights: checkpoints/rloo_encoder_balanced_v1_lichess_mixed_v4_continued.pt
+logging:
+  stdout: true
+  jsonl_path: logs/rloo_encoder_lichess_mixed_v4_continued.metrics.jsonl
+  wandb:
+    enabled: true
+    project: chess_vision
+    name: rloo_encoder_lichess_mixed_v4
+    mode: online
+    offline_fallback: true
+    init_timeout_s: 30
+resume_path: checkpoints/rloo_encoder_balanced_v1_lichess_mixed_v4.latest.pt
+export_every_batches: 50

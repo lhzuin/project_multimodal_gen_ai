@@ -35,7 +35,6 @@ import time
 import chess
 import chess.pgn
 import torch
-import numpy as np
 from torch.utils.data import Dataset
 
 from utils.stockfish_teacher import StockfishUCI, _score_to_scalar, _uci_to_from_to_promo

@@ -1,0 +1,5 @@
+model,metric,contrast,difference_in_differences,ci_low,ci_high
+rapid,agreement,(model-classic on own category) - (model-classic on classic category),0.0012245543003770454,-0.0033603493350552295,0.005533340193701855
+rapid,nll,(model-classic on own category) - (model-classic on classic category),-0.016232621891219656,-0.025544368362701388,-0.006463166740942942
+blitz,agreement,(model-classic on own category) - (model-classic on classic category),0.004391308322987175,-0.0004886867023669028,0.008986657566280625
+blitz,nll,(model-classic on own category) - (model-classic on classic category),-0.016630253002628992,-0.02693631957618834,-0.006673546679634873

@@ -1,10 +1,9 @@
-# train.py
+"""Train the original board encoder policy used by early checkpoints."""
 import os, sys, signal, random
 import numpy as np
 import torch
 import wandb
 import hydra
-import chess
 import torch.nn.functional as F
 from omegaconf import OmegaConf
 from torch.utils.data import DataLoader, Subset
@@ -14,7 +13,7 @@ from tqdm.auto import tqdm
 
 os.environ["HYDRA_FULL_ERROR"] = "1"
 
-OmegaConf.register_new_resolver("if", lambda cond, a, b: a if cond else b)
+OmegaConf.register_new_resolver("if", lambda cond, a, b: a if cond else b, replace=True)
 
 
 def set_seed(seed: int):
@@ -426,7 +425,8 @@ def main(cfg):
         print(f"Saved checkpoint → {cfg.checkpoint_save_path}")
         sys.exit(0)
 
-    signal.signal(signal.SIGUSR1, save_and_exit)
+    if hasattr(signal, "SIGUSR1"):
+        signal.signal(signal.SIGUSR1, save_and_exit)
 
     trainer.run_train()
 

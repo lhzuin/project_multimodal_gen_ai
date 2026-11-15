@@ -1,0 +1,12 @@
+[
+  {
+    "entry_id": "integration-opening-1",
+    "moves_uci": ["e2e4", "e7e5", "g1f3", "b8c6"],
+    "metadata": {"source": "synthetic integration example"}
+  },
+  {
+    "entry_id": "integration-opening-2",
+    "moves_uci": ["d2d4", "d7d5", "c2c4", "e7e6"],
+    "metadata": {"source": "synthetic integration example"}
+  }
+]

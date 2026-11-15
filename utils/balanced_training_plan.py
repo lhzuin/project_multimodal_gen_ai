@@ -288,7 +288,7 @@ class PartitionedEarlyWriter:
             raise PlanError("more than 2^32 valid games are not supported")
         if ply >= 2**16:
             raise PlanError(
-                f"encountered a game with ply >= 65536; increase the early-record ply field"
+                "encountered a game with ply >= 65536; increase the early-record ply field"
             )
         if band >= 2**8:
             raise PlanError("more than 255 absolute-ply bands are not supported")

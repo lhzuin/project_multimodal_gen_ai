@@ -1,5 +1,5 @@
 import os, json, tempfile, io
-from typing import List, Tuple, Optional, Dict, Any
+from typing import List, Tuple, Optional
 
 import chess
 import chess.pgn

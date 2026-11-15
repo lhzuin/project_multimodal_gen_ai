@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="700" height="325" viewBox="0 0 700 325">
+<rect width="100%" height="100%" fill="white"/>
+<text x="20" y="32" font-family="sans-serif" font-size="20">Top-1 disagreement with classical policy</text>
+<g font-family="sans-serif" font-size="15">
+<text x="245" y="78" text-anchor="middle">classic</text>
+<text x="390" y="78" text-anchor="middle">rapid</text>
+<text x="535" y="78" text-anchor="middle">blitz</text>
+<text x="15" y="140">rapid–classic</text>
+<rect x="175" y="100" width="140" height="75" rx="3" fill="rgb(182,211,250)"/>
+<text x="245" y="143" text-anchor="middle">27.84%</text>
+<rect x="320" y="100" width="140" height="75" rx="3" fill="rgb(130,181,250)"/>
+<text x="390" y="143" text-anchor="middle">28.37%</text>
+<rect x="465" y="100" width="140" height="75" rx="3" fill="rgb(205,225,250)"/>
+<text x="535" y="143" text-anchor="middle">27.61%</text>
+<text x="15" y="225">blitz–classic</text>
+<rect x="175" y="185" width="140" height="75" rx="3" fill="rgb(240,246,250)"/>
+<text x="245" y="228" text-anchor="middle">27.25%</text>
+<rect x="320" y="185" width="140" height="75" rx="3" fill="rgb(160,199,250)"/>
+<text x="390" y="228" text-anchor="middle">28.06%</text>
+<rect x="465" y="185" width="140" height="75" rx="3" fill="rgb(210,228,250)"/>
+<text x="535" y="228" text-anchor="middle">27.55%</text>
+<text x="15" y="310" font-size="12">Columns: held-out test category. See CSV tables for paired game-bootstrap intervals.</text>
+</g></svg>

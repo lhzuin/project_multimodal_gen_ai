@@ -1,0 +1,68 @@
+# Controlled higher-LR pilot. Fresh ORIGINAL v12, not a resume of final RL.
+# Only RLOO algorithm change vs final: LR 1e-6 -> 1e-5 (10x).
+# Preserve data/order/reward/horizon/KL/batch/temperature for interpretation.
+database:
+  manifest: processed_games/rl/lichess_mixed_final/train.json
+checkpoint_path: checkpoints/chess_llm_decoder_v12.pt
+model_type: decoder
+model_kwargs:
+  tokenizer_path: tokenizers/chess_uci_vocab.json
+  model_dim: 256
+  mlp_ratio: 4.0
+  n_heads: 4
+  n_layers: 12
+  dropout: 0.1
+  max_seq_len: 256
+  tie_weights: true
+server:
+  mode: local
+  opponent:
+    executable: stockfish
+    workers: 3
+    threads_per_engine: 1
+    hash_mb_per_engine: 64
+    limit_strength: false
+    uci_elo: null
+    default_limit:
+      nodes: 30000
+    clear_hash_before_search: true
+  evaluator:
+    executable: stockfish
+    workers: 1
+    threads_per_engine: 1
+    hash_mb_per_engine: 128
+    default_limit:
+      nodes: 100000
+    clear_hash_before_search: true
+rloo:
+  training_batch_size: 64
+  rollouts_per_entry: 4
+  max_concurrent_games: 8
+  sampling_batch_size: 1
+  micro_batch_size: 1
+  ply_depth: 20
+  randomize_policy_color: false
+  temperature: 0.8
+  learning_rate: 1.0e-05
+  weight_decay: 0.0
+  kl_beta: 0.2
+  reward_mode: tanh
+  reward_scale_cp: 400.0
+  max_grad_norm: 1.0
+  device: auto
+  seed: 42
+epochs: 2
+save_every_batches: 10
+output_checkpoint: checkpoints/rloo_decoder_v12_lichess_mixed_v2_lr_probe.latest.pt
+export_weights: checkpoints/rloo_decoder_v12_lichess_mixed_v2_lr_probe.pt
+logging:
+  stdout: true
+  jsonl_path: logs/rloo_decoder_lichess_mixed_v2_lr_probe.metrics.jsonl
+  wandb:
+    enabled: true
+    project: chess_vision
+    name: rloo_decoder_v12_lichess_mixed_v2_lr_probe
+    mode: online
+    offline_fallback: true
+    init_timeout_s: 30
+export_every_batches: 25
