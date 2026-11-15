@@ -1,0 +1,19 @@
+# All artifact paths resolve against --project-root (default: this checkout).
+corpus_dir: processed_games/eval/twic_1662_1667_categories
+prefix: twic_1662_1667_categories
+output_dir: outputs/twic_1662_1667_time_controls
+checkpoints:
+  classic: checkpoints/chess_encoder_seq_balanced_v1.best.pt
+  rapid: checkpoints/chess_encoder_seq_balanced_rapid_v1.best.pt
+  blitz: checkpoints/chess_encoder_seq_balanced_blitz_v1.best.pt
+games_per_category: 1000
+seed: 42
+min_elo: 1600
+lower_week: 1662
+start_week: 1667
+batch_size: 64
+bootstrap: 2000
+allow_shortfall: false
+# Optional complete PGNs to scan for canonical-game overlaps, before sampling.
+# Empty uses temporal source separation and records that basis in the manifest.
+exclude_pgns: []
