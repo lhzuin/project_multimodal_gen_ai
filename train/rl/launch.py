@@ -91,6 +91,8 @@ async def run_training(
                 max_updates=config.get("max_updates"),
                 checkpoint_path=output,
                 save_every_batches=config.get("save_every_batches", 1),
+                export_weights_path=config.get("export_weights"),
+                export_every_batches=config.get("export_every_batches"),
                 on_metrics=logger,
             )
             if config.get("export_weights"):

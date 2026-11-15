@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import os
 from pathlib import Path
+import shutil
 from typing import Any
 
 import chess.engine
@@ -54,13 +56,18 @@ class EnginePoolConfig:
     threads_per_engine: int = 1
     hash_mb_per_engine: int = 64
     queue_capacity: int = 4096
-    default_limit: SearchLimit = field(default_factory=lambda: SearchLimit(movetime_ms=50))
+    default_limit: SearchLimit = field(
+        default_factory=lambda: SearchLimit(movetime_ms=50)
+    )
     limit_strength: bool = False
     uci_elo: int | None = None
     skill_level: int | None = None
     restart_attempts: int = 1
+    clear_hash_before_search: bool = False
 
     def __post_init__(self) -> None:
+        if not isinstance(self.clear_hash_before_search, bool):
+            raise ValueError("clear_hash_before_search must be a boolean")
         if self.workers < 1:
             raise ValueError("workers must be at least 1")
         if self.threads_per_engine < 1:
@@ -77,13 +84,17 @@ class EnginePoolConfig:
             raise ValueError("uci_elo requires limit_strength=True")
 
     def validate_executable(self) -> Path:
-        path = Path(self.executable).expanduser().resolve()
+        executable = self.executable
+        if executable == "stockfish":
+            executable = os.environ.get("STOCKFISH_EXECUTABLE", executable)
+        path = Path(shutil.which(executable) or executable).expanduser().resolve()
         if not path.is_file():
             raise FileNotFoundError(f"Stockfish executable not found: {path}")
         return path
 
     def public_dict(self) -> dict[str, Any]:
         return {
+            "executable": self.executable,
             "workers": self.workers,
             "threads_per_engine": self.threads_per_engine,
             "hash_mb_per_engine": self.hash_mb_per_engine,
@@ -92,6 +103,8 @@ class EnginePoolConfig:
             "limit_strength": self.limit_strength,
             "uci_elo": self.uci_elo,
             "skill_level": self.skill_level,
+            "restart_attempts": self.restart_attempts,
+            "clear_hash_before_search": self.clear_hash_before_search,
         }
 
 

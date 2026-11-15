@@ -1,29 +1,40 @@
-# RL experiment configurations
+# RL configurations
 
-Run from the repository root:
+Run `python -m train.rloo --config <file>` or `python -m train.grpo --config <file>`
+from the repository root. Files use plain YAML with duplicate-key validation:
+there is no Hydra composition, interpolation or `--config-name`.
 
-```bash
-.venv/bin/python -m train.rloo --config configs/rl/rloo_encoder_lichess_mixed_v2.yaml
-```
+## Main recipes
 
-- `rloo_encoder_lichess_mixed_v1.yaml`: exact settings of the completed original
-  experiment, converted from JSON without changing any values.
-- `rloo_encoder_lichess_mixed_v2.yaml`: exact settings of the previous v2 JSON;
-  JSONL logging, optional W&B (disabled by default), explicit norm limit 1.0,
-  checkpointing every 10 batches, and separate v2 output filenames.
-- `examples/`: small GRPO/RLOO encoder and decoder integration examples.
+| Recipe | Purpose |
+|---|---|
+| `rloo_encoder_lichess_mixed_final.yaml` | Encoder with early-game anchors, 20-ply horizon, four rollouts per anchor, two epochs |
+| `rloo_decoder_lichess_mixed_final.yaml` | Original-v12 decoder control, 20-ply horizon, four rollouts per anchor, two epochs |
+| `rloo_decoder_lichess_mixed_v5_horizon8.yaml` | Decoder with 8-ply horizon, eight rollouts per anchor, six epochs |
+| `examples/` | Small encoder/decoder GRPO and RLOO integration configurations |
 
-Both versions initialize from the original supervised checkpoint. V2 is not a
-resume or extra epoch unless you explicitly configure it. Do not rerun v1 casually:
-its original output paths still point at the completed experiment's checkpoints.
+Versioned v1-v5 files retain the distinct learning-rate, horizon, reward, engine
+and batch choices used in earlier experiments. They are reproducibility recipes,
+not a chronological to-do list or a claim of playing strength. Result tables live
+under `results/`. Explicit continuation/resume recipes retain their saved run
+paths; inspect them before launching.
 
-Launchers and the held-out evaluator require `.yaml` or `.yml` and share safe
-loading with duplicate-key checks. This is plain YAML, not Hydra composition:
-there is no `defaults` expansion, `${...}` interpolation, or `--config-name`.
-Training classes still accept config objects and do not depend on Hydra or YAML.
-Relative file paths are resolved from the working directory, not this folder.
+## Runtime inputs
 
-Dataset manifests, build provenance, evaluation results and metric journals remain
-JSON/JSONL. The six migrated experiment JSON files were removed. A canonical
-settings-hash regression test guards the exact v1/v2 migration; the dataset
-manifest retains the original v1 JSON hash and references the relocated YAML.
+Prepare `database.manifest` and the supervised `checkpoint_path` first. Decoder
+prompts require legal full histories from their starting FEN. Production recipes
+can own a local Stockfish service; examples use a separately started remote one.
+Put Stockfish on `PATH`, set `STOCKFISH_EXECUTABLE`, or replace `executable` with
+its path. Scientific search/batch settings are unchanged by executable relocation.
+Historical-v1 regression checks use normalized portable executable names.
+
+Paths are relative to the working directory. Use new output/checkpoint/log paths
+for a fresh experiment. A restart uses an explicit `resume_path` and preserves
+algorithm settings, the frozen reference and absolute epoch/update targets.
+`save_every_batches` controls full checkpoints; `export_every_batches` retains
+numbered inference exports. Final `export_weights` remains separate.
+
+Logging is optional under `logging`; W&B is disabled unless enabled. See
+[shared RL lifecycle and metrics](../../train/rl/README.md),
+[RLOO](../../train/rloo/README.md), [GRPO](../../train/grpo/README.md), and
+[dataset construction](../../utils/dataset_rl/README.md).

@@ -1,0 +1,66 @@
+# Decoder RLOO: 8-ply horizon, 8 rollouts per anchor, six epochs.
+database:
+  manifest: processed_games/rl/lichess_mixed_final/train.json
+checkpoint_path: checkpoints/chess_llm_decoder_v12.pt
+model_type: decoder
+model_kwargs:
+  tokenizer_path: tokenizers/chess_uci_vocab.json
+  model_dim: 256
+  mlp_ratio: 4.0
+  n_heads: 4
+  n_layers: 12
+  dropout: 0.1
+  max_seq_len: 256
+  tie_weights: true
+server:
+  mode: local
+  opponent:
+    executable: stockfish
+    workers: 3
+    threads_per_engine: 1
+    hash_mb_per_engine: 64
+    limit_strength: false
+    uci_elo: null
+    default_limit:
+      nodes: 30000
+    clear_hash_before_search: true
+  evaluator:
+    executable: stockfish
+    workers: 1
+    threads_per_engine: 1
+    hash_mb_per_engine: 128
+    default_limit:
+      nodes: 100000
+    clear_hash_before_search: true
+rloo:
+  training_batch_size: 64
+  rollouts_per_entry: 8
+  max_concurrent_games: 8
+  sampling_batch_size: 1
+  micro_batch_size: 1
+  ply_depth: 8
+  randomize_policy_color: false
+  temperature: 0.8
+  learning_rate: 3.0e-05
+  weight_decay: 0.0
+  kl_beta: 0.15
+  reward_mode: tanh
+  reward_scale_cp: 400.0
+  max_grad_norm: 1.0
+  device: auto
+  seed: 42
+epochs: 6
+save_every_batches: 10
+output_checkpoint: checkpoints/rloo_decoder_v12_lichess_mixed_v5_horizon8.latest.pt
+export_weights: checkpoints/rloo_decoder_v12_lichess_mixed_v5_horizon8.pt
+logging:
+  stdout: true
+  jsonl_path: logs/rloo_decoder_lichess_mixed_v5_horizon8.metrics.jsonl
+  wandb:
+    enabled: true
+    project: chess_vision
+    name: rloo_decoder_v12_lichess_mixed_v5_horizon8
+    mode: online
+    offline_fallback: true
+    init_timeout_s: 30
+export_every_batches: 25

@@ -1,12 +1,30 @@
 from __future__ import annotations
 
 import unittest
+import os
+from pathlib import Path
+import tempfile
+from unittest.mock import patch
 
 from rl_stockfish_service.config import EnginePoolConfig, SearchLimit
 from rl_stockfish_service.protocol import GameSpec, PolicyColor
 
 
 class ProtocolTests(unittest.TestCase):
+    def test_engine_path_accepts_path_lookup_and_environment_override(self):
+        with tempfile.TemporaryDirectory() as directory:
+            executable = Path(directory) / "stockfish"
+            executable.touch(mode=0o755)
+            config = EnginePoolConfig(executable="stockfish")
+            with patch.dict(os.environ, {"PATH": directory}, clear=True):
+                self.assertEqual(config.validate_executable(), executable.resolve())
+            with patch.dict(os.environ, {"STOCKFISH_EXECUTABLE": str(executable)}):
+                self.assertEqual(config.validate_executable(), executable.resolve())
+
+    def test_cache_reset_setting_is_explicit_boolean(self):
+        with self.assertRaisesRegex(ValueError, "must be a boolean"):
+            EnginePoolConfig(executable="stockfish", clear_hash_before_search="true")
+        self.assertFalse(EnginePoolConfig(executable="stockfish").clear_hash_before_search)
     def test_game_spec_validates_opening(self) -> None:
         spec = GameSpec.from_dict(
             {

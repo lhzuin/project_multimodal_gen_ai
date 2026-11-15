@@ -433,6 +433,8 @@ class RolloutCoordinator:
             counts[game.status.value] += 1
         return {
             "api_version": "1",
+            "capabilities": ["rollouts", "play_positions"],
+            "max_batch_size": self.config.max_batch_size,
             "status": "ok",
             "games": counts,
             "policy_queue_size": self.policy_queue.qsize(),

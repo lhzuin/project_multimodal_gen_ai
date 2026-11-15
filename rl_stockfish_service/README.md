@@ -10,6 +10,27 @@ positions and legal moves; the trainer samples actions and sends them back.
 This is important: a single GPU forward pass can serve many simultaneous games,
 and the service never holds a stale copy of weights that are changing during RL.
 
+The service also supports full-game evaluation via
+[`utils/tournament_runner_async.py`](../utils/async_tournament/README.md). That
+client retains the original tournament's UCI policy and game/scoring rules,
+using the stateless `play_positions` endpoint rather than RL horizon rewards.
+
+### Stateless opponent queries (additive API v1 capability)
+
+`health.capabilities` advertises `play_positions`, `health.max_batch_size` gives
+the request bound, and each pool's health contains its public configuration and
+launched engine identities. `AsyncRolloutClient.play_positions(positions)` accepts
+a list of `{id, start_fen, moves_uci, limit}` records. History moves are replayed
+from `start_fen`; `limit` is an optional `{movetime_ms, depth, nodes}` mapping.
+The entire batch is validated before searches are submitted. Each response has
+`id`, `move_uci` and `error` (`null` on success, otherwise `{type,message}`).
+No game IDs are allocated, no board is advanced for the caller, and no CP or
+result is inferred. The endpoint uses the same bounded opponent queue and leaves
+rollout collection unchanged. Independent requests can coexist, but use a
+dedicated server/resource budget for controlled tournament measurements.
+`--restart-attempts 0` disables failed-search retries for tournament forfeits;
+the original RL service default remains one retry.
+
 ## Architecture
 
 ```text
@@ -43,7 +64,7 @@ From the repository root:
 
 ```bash
 python -m rl_stockfish_service \
-  --stockfish /Users/luiszuin/Downloads/stockfish/stockfish-macos-m1-apple-silicon \
+  --stockfish /path/to/stockfish \
   --play-workers 4 \
   --eval-workers 2 \
   --play-threads 1 \
@@ -222,6 +243,28 @@ These are suitable semantics for a single-node first RL implementation. A later
 distributed deployment should add durable rollout IDs, idempotency persistence,
 authentication, telemetry, and a real message broker without changing the
 policy observation/action schema.
+
+## Search-work diagnostics
+
+Each pool publishes `worker_pids` and cumulative `searches` statistics for play
+and evaluation, including counts, node totals/means, mean depth and reported
+engine/search wall times. These reveal the work done under wall-time budgets;
+nominal milliseconds alone do not fix search effort under CPU contention.
+Workers own independent Stockfish subprocesses, so their native searches are
+not serialized by Python's GIL.
+
+`EnginePoolConfig.clear_hash_before_search` defaults to `false`, preserving the
+existing cache behavior. Set it explicitly to `true` to issue `Clear Hash`
+before every query. Combined with a fixed-node limit and one thread per engine,
+this removes previous-query cache history from controlled comparisons. It
+changes effective search conditions and may cost throughput; it does not make
+limited-strength random move selection or asynchronous policy sampling fully
+deterministic. New controlled runs must be compared with baselines using the
+same node and cache settings.
+
+The proposed v5 config uses 30,000 opponent nodes, 100,000 evaluator nodes and
+cold caches, rather than a wall-time opponent budget. This is an experiment,
+not a calibrated Stockfish Elo setting or a guarantee of stronger training.
 
 ## Tests
 

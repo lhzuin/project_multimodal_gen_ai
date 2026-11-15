@@ -38,6 +38,21 @@ def trainer(cfg=None, server=None):
 
 
 class TrainerTests(unittest.IsolatedAsyncioTestCase):
+    async def test_periodic_exports_preserve_intermediate_models(self):
+        instance = trainer()
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "weights.pt"
+            await instance.fit(epochs=1, export_weights_path=path, export_every_batches=1)
+            first = path.with_name("weights.step-000001.pt")
+            last = path.with_name("weights.step-000002.pt")
+            self.assertTrue(first.is_file())
+            self.assertTrue(last.is_file())
+            torch.testing.assert_close(
+                torch.load(last, weights_only=True)["weight"], instance.policy.model.weight
+            )
+            self.assertFalse(path.exists())  # final named export remains launcher-owned
+        with self.assertRaisesRegex(ValueError, "periodic exports"):
+            await instance.fit(epochs=1, export_every_batches=1)
     async def test_full_rollout_updates_once_and_reference_stays_fixed(self):
         instance = trainer()
         original = instance.policy.model.weight.detach().clone()

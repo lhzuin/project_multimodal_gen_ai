@@ -13,16 +13,18 @@ model_kwargs:
 server:
   mode: local
   opponent:
-    executable: /Users/luiszuin/Downloads/stockfish/stockfish-macos-m1-apple-silicon
+    executable: stockfish
     workers: 3
     threads_per_engine: 1
     hash_mb_per_engine: 64
-    limit_strength: true
-    uci_elo: 2100
+    # limit_strength: true
+    # uci_elo: 2500
+    limit_strength: false
+    uci_elo: null # check which one is better
     default_limit:
       movetime_ms: 50
   evaluator:
-    executable: /Users/luiszuin/Downloads/stockfish/stockfish-macos-m1-apple-silicon
+    executable: stockfish
     workers: 1
     threads_per_engine: 1
     hash_mb_per_engine: 128
@@ -36,7 +38,7 @@ rloo:
   micro_batch_size: 1
   ply_depth: 10
   randomize_policy_color: false
-  temperature: 0.8
+  temperature: 0.8 # maybe increase to 1 in v3
   learning_rate: 5.0e-06
   kl_beta: 0.04
   reward_mode: tanh
@@ -44,7 +46,7 @@ rloo:
   device: auto
   seed: 42
   max_grad_norm: 1.0
-epochs: 1
+epochs: 1 #maybe increase to 2
 save_every_batches: 10
 output_checkpoint: checkpoints/rloo_encoder_balanced_v1_lichess_mixed_v2.latest.pt
 export_weights: checkpoints/rloo_encoder_balanced_v1_lichess_mixed_v2.pt
@@ -52,7 +54,7 @@ logging:
   stdout: true
   jsonl_path: logs/rloo_encoder_lichess_mixed_v2.metrics.jsonl
   wandb:
-    enabled: false
+    enabled: true
     project: chess_vision
     name: rloo_encoder_lichess_mixed_v2
     mode: online

@@ -45,6 +45,17 @@ class ServerTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(RolloutAPIError):
             await self.client.create_games([{"policy_color": "purple"}])
 
+    async def test_stateless_play_positions_over_wire(self) -> None:
+        result = await self.client.play_positions(
+            [
+                {"id": "first", "moves_uci": ["e2e4"]},
+                {"id": "second", "moves_uci": ["d2d4"]},
+            ]
+        )
+        self.assertEqual([r["id"] for r in result], ["first", "second"])
+        self.assertTrue(all(r["error"] is None for r in result))
+        self.assertEqual(await self.client.get_games(), [])
+
 
 if __name__ == "__main__":
     unittest.main()

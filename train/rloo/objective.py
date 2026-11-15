@@ -63,9 +63,12 @@ def training_items(
     ]
     items: list[RLOODecision] = []
     scores, rewards, kls, returns_all = [], [], [], []
+    reward_spreads, reward_stds, abs_advantages = [], [], []
+    reward_zero_variance = 0
     zero_variance = 0
     for group in valid:
         group_returns = []
+        group_rewards = []
         for trajectory in group:
             cp = trajectory.score_cp
             if not math.isfinite(cp):
@@ -76,11 +79,20 @@ def training_items(
             value = reward - config.kl_beta * kl
             scores.append(cp)
             rewards.append(reward)
+            group_rewards.append(reward)
             kls.append(kl)
             returns_all.append(value)
             group_returns.append(value)
         values = torch.tensor(group_returns, dtype=torch.float64)
         advantages = leave_one_out_advantages(values).tolist()
+        abs_advantages.extend(abs(value) for value in advantages)
+        spread = max(group_rewards) - min(group_rewards)
+        reward_spreads.append(spread)
+        reward_zero_variance += int(spread == 0)
+        reward_mean = sum(group_rewards) / len(group_rewards)
+        reward_stds.append(
+            math.sqrt(sum((r - reward_mean) ** 2 for r in group_rewards) / len(group_rewards))
+        )
         zero_variance += int(torch.all(values == values[0]))
         # Average groups and trajectories, but SUM policy actions within each
         # trajectory. Dividing by its length would change episodic REINFORCE.
@@ -97,6 +109,18 @@ def training_items(
         "valid_groups": float(len(valid)),
         "dropped_groups": float(len(groups) - len(valid)),
         "zero_variance_groups": float(zero_variance),
+        # Raw environment rewards can be flat while KL makes regularized
+        # returns vary. Keep these diagnostics separate from zero_variance_groups.
+        "reward_zero_variance_groups": float(reward_zero_variance),
+        "reward_low_spread_groups": float(sum(s < 0.02 for s in reward_spreads)),
+        "mean_reward_group_spread": mean(reward_spreads),
+        "mean_reward_group_std": mean(reward_stds),
+        "reward_saturation_fraction": (
+            mean([float(abs(r) > 0.99) for r in rewards])
+            if config.reward_mode == "tanh" else 0.0
+        ),
+        "mean_abs_advantage": mean(abs_advantages),
+        "mean_abs_kl_penalty": mean([config.kl_beta * abs(kl) for kl in kls]),
         "mean_score_cp": mean(scores),
         "mean_reward": mean(rewards),
         "mean_return": mean(returns_all),

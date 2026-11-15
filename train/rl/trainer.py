@@ -139,8 +139,14 @@ class OnPolicyTrainer(ABC):
             started = time.monotonic()
             prompts = self._prompts(indices)
             trajectories = await self.collector.collect(prompts)
+            health = await self.server.health()
             collected = time.monotonic()
             items, metrics = self.training_items(trajectories)
+            for role, kind in (("opponent", "play"), ("evaluator", "evaluate")):
+                searches = health.get(role + "_pool", {}).get("searches", {}).get(kind, {})
+                for name in ("nodes_mean", "depth_mean"):
+                    if name in searches:
+                        metrics[f"server_{role}_{name}_cumulative"] = float(searches[name])
             # Training stays synchronous once collection completes: no sampled
             # action can race with optimizer changes to the policy weights.
             metrics.update(self.update(items))
@@ -163,6 +169,8 @@ class OnPolicyTrainer(ABC):
         max_updates: int | None = None,
         checkpoint_path: str | Path | None = None,
         save_every_batches: int = 1,
+        export_weights_path: str | Path | None = None,
+        export_every_batches: int | None = None,
         on_metrics: Callable[[Mapping[str, float]], None] | None = None,
     ) -> None:
         """Train to an absolute epoch/update target; resume at batch boundaries."""
@@ -174,6 +182,10 @@ class OnPolicyTrainer(ABC):
             raise ValueError(
                 "epochs, save_every_batches, and max_updates must be positive"
             )
+        if export_every_batches is not None and (
+            export_every_batches < 1 or export_weights_path is None
+        ):
+            raise ValueError("periodic exports need a positive interval and export_weights_path")
         if max_updates is not None and max_updates % self.updates_per_batch:
             raise ValueError("max_updates must align with optimizer batch boundaries")
         while self.epoch < epochs:
@@ -199,6 +211,10 @@ class OnPolicyTrainer(ABC):
             )
             if checkpoint_path and self.completed_batches % save_every_batches == 0:
                 self.save_checkpoint(checkpoint_path)
+            if export_every_batches and self.completed_batches % export_every_batches == 0:
+                path = Path(export_weights_path)
+                path = path.with_name(f"{path.stem}.step-{self.optimizer_steps:06d}{path.suffix}")
+                self.export_weights(path)
             if on_metrics:
                 on_metrics(metrics)
         if checkpoint_path:

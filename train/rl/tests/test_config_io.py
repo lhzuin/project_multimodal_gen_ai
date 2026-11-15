@@ -15,10 +15,10 @@ from train.rloo import RLOOConfig
 
 
 class ConfigIOTests(unittest.TestCase):
-    def test_v1_v2_match_canonical_original_json_settings(self):
+    def test_v1_matches_canonical_original_json_settings(self):
+        # Historical v1 settings, with machine-specific executable paths normalized to stockfish.
         expected = {
-            "v1": "a63151d1e127368969d90edee765159e55206c01ae17c261f5d562ecb4657644",
-            "v2": "be3271a30ee0618349593a09671d4b6a4213e92e9779bbb588ac0a809fff6c31",
+            "v1": "6872b7cc77dc5eb68d7bcf3b323cc69a3919d9c46251acd0ad1f98dcf3047525",
         }
         for version, digest in expected.items():
             with self.subTest(version=version):
@@ -32,6 +32,25 @@ class ConfigIOTests(unittest.TestCase):
                 RLOOConfig(**config["rloo"])
                 self.assertIsInstance(config["rloo"]["learning_rate"], float)
                 self.assertIs(config["rloo"]["randomize_policy_color"], False)
+
+    def test_current_rl_configs_validate_and_have_separate_outputs(self):
+        outputs = []
+        for version in ("v1", "v2", "v3", "v4", "v5"):
+            config = load_config(Path(f"configs/rl/rloo_encoder_lichess_mixed_{version}.yaml"))
+            RLOOConfig(**config["rloo"])
+            outputs.extend((config["output_checkpoint"], config["export_weights"]))
+            self.assertEqual(config["checkpoint_path"], "checkpoints/chess_encoder_seq_balanced_v1.best.pt")
+            self.assertNotIn("resume_path", config)
+        self.assertEqual(len(set(outputs)), len(outputs))
+
+    def test_v4_continuation_preserves_training_settings_and_pilot_paths(self):
+        pilot = load_config(Path("configs/rl/rloo_encoder_lichess_mixed_v4.yaml"))
+        continued = load_config(Path("configs/rl/rloo_encoder_lichess_mixed_v4_continue.yaml"))
+        self.assertEqual(continued["rloo"], pilot["rloo"])
+        self.assertEqual(continued["server"], pilot["server"])
+        self.assertEqual(continued["resume_path"], pilot["output_checkpoint"])
+        self.assertNotEqual(continued["output_checkpoint"], pilot["output_checkpoint"])
+        self.assertNotEqual(continued["export_weights"], pilot["export_weights"])
 
     def test_roundtrip_comments_yml_and_cli(self):
         expected = {

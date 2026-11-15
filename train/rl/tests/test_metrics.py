@@ -1,7 +1,5 @@
 """Logging tests use a fake W&B module: no network, account, or SDK required."""
 
-import contextlib
-import io
 import json
 from pathlib import Path
 import tempfile
@@ -14,7 +12,7 @@ import torch
 from train.grpo.tests.helpers import MemoryServer, TinyPolicy
 from train.rl.launch import run_training
 from train.rl.metrics import MetricsLogger
-from train.rl.optimization import clip_gradients
+from train.rl.optimization import clip_gradients, step_with_update_metrics
 from train.rloo import RLOOConfig, RLOOTrainer
 
 
@@ -136,6 +134,35 @@ class MetricsTests(unittest.TestCase):
         )
         parameter.grad = torch.tensor([0.1, 0.1])
         self.assertEqual(clip_gradients([parameter], 1.0)["grad_clipped"], 0.0)
+
+    def test_equal_gradient_norm_does_not_imply_equal_adam_update(self):
+        parameter = torch.nn.Parameter(torch.ones(2))
+        optimizer = torch.optim.AdamW([parameter], lr=0.1, weight_decay=0)
+        norms = []
+        for gradient in (torch.tensor([1.0, 0.0]), torch.tensor([-1.0, 0.0])):
+            parameter.grad = gradient
+            before = parameter.detach().clone()
+            self.assertAlmostEqual(clip_gradients([parameter], 1)["grad_norm_post_clip_estimate"], 1, places=5)
+            metrics = step_with_update_metrics(optimizer)
+            actual = (parameter.detach() - before).norm().item()
+            self.assertAlmostEqual(metrics["parameter_update_norm"], actual, places=7)
+            self.assertAlmostEqual(metrics["relative_parameter_update_norm"], actual / before.norm().item(), places=7)
+            norms.append(actual)
+        self.assertGreater(norms[0], 10 * norms[1])
+
+    def test_update_metrics_preserve_optimizer_and_skip_frozen_parameters(self):
+        measured = torch.nn.Parameter(torch.tensor([1.0, 2.0]))
+        control = torch.nn.Parameter(measured.detach().clone())
+        frozen = torch.nn.Parameter(torch.ones(2), requires_grad=False)
+        measured_optimizer = torch.optim.AdamW([measured, frozen], lr=0.01)
+        control_optimizer = torch.optim.AdamW([control], lr=0.01)
+        for gradient in (torch.tensor([3.0, -4.0]), torch.tensor([-1.0, 2.0])):
+            measured.grad = gradient.clone()
+            control.grad = gradient.clone()
+            step_with_update_metrics(measured_optimizer)
+            control_optimizer.step()
+            torch.testing.assert_close(measured, control, rtol=0, atol=0)
+        torch.testing.assert_close(frozen, torch.ones(2))
 
 
 class LauncherMetricsTests(unittest.IsolatedAsyncioTestCase):

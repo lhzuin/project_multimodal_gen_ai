@@ -13,7 +13,7 @@ model_kwargs:
 server:
   mode: local
   opponent:
-    executable: /Users/luiszuin/Downloads/stockfish/stockfish-macos-m1-apple-silicon
+    executable: stockfish
     workers: 3
     threads_per_engine: 1
     hash_mb_per_engine: 64
@@ -22,7 +22,7 @@ server:
     default_limit:
       movetime_ms: 50
   evaluator:
-    executable: /Users/luiszuin/Downloads/stockfish/stockfish-macos-m1-apple-silicon
+    executable: stockfish
     workers: 1
     threads_per_engine: 1
     hash_mb_per_engine: 128

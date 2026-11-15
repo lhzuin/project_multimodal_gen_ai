@@ -8,6 +8,7 @@ from rl_stockfish_service.config import EnginePoolConfig, ServiceConfig
 from rl_stockfish_service.coordinator import RolloutCoordinator
 from rl_stockfish_service.engine_pool import StockfishPool
 from rl_stockfish_service.protocol import GameSpec
+from rl_stockfish_service.position_play import play_positions
 
 
 class LocalStockfishServer:
@@ -51,6 +52,15 @@ class LocalStockfishServer:
 
     async def health(self) -> dict[str, Any]:
         return self.coordinator.health()
+
+    async def play_positions(
+        self, positions: Sequence[Mapping[str, Any]]
+    ) -> list[dict[str, Any]]:
+        return await play_positions(
+            self.opponent,
+            positions,
+            max_batch_size=self.coordinator.config.max_batch_size,
+        )
 
     async def create_games(
         self, games: Sequence[Mapping[str, Any]]

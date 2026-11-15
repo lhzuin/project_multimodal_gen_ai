@@ -79,6 +79,12 @@ class AsyncRolloutClient:
     async def health(self) -> dict[str, Any]:
         return await self._request("health")
 
+    async def play_positions(
+        self, positions: Iterable[Mapping[str, Any]]
+    ) -> list[dict[str, Any]]:
+        """Search independent positions; histories and per-position errors retained."""
+        return await self._request("play_positions", {"positions": list(positions)})
+
     async def create_games(
         self, games: Iterable[Mapping[str, Any]]
     ) -> list[dict[str, Any]]:

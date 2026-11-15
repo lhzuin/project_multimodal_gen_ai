@@ -43,3 +43,26 @@ class EvaluationTests(unittest.IsolatedAsyncioTestCase):
         self.assertAlmostEqual(
             comparison_summary(a, b)["paired_reward_difference"], 0.2
         )
+
+    async def test_multiple_anchors_share_a_source_game_uncertainty_cluster(self):
+        baseline = {str(i): {"mean_reward": 0, "game_id": str(i // 2)} for i in range(4)}
+        candidate = {str(i): {"mean_reward": .2 if i < 2 else -.2, "game_id": str(i // 2)} for i in range(4)}
+        result = comparison_summary(baseline, candidate)
+        self.assertEqual(result["positions"], 4)
+        self.assertEqual(result["independent_game_clusters"], 2)
+        self.assertAlmostEqual(result["paired_standard_error"], .2)
+        self.assertAlmostEqual(result["paired_reward_difference"], 0)
+
+    async def test_legacy_independent_position_standard_error_is_preserved(self):
+        baseline = {str(i): {"mean_reward": 0} for i in range(4)}
+        candidate = {str(i): {"mean_reward": .2 if i < 2 else -.2} for i in range(4)}
+        result = comparison_summary(baseline, candidate)
+        self.assertAlmostEqual(result["paired_standard_error"], .2 / 3 ** .5)
+
+    async def test_game_identity_must_match_and_more_than_one_game_is_needed(self):
+        baseline = {str(i): {"mean_reward": 0, "game_id": "same"} for i in range(2)}
+        with self.assertRaisesRegex(ValueError, "two independent"):
+            comparison_summary(baseline, baseline)
+        candidate = {key: {**row, "game_id": "other"} for key, row in baseline.items()}
+        with self.assertRaisesRegex(ValueError, "different source-game"):
+            comparison_summary(baseline, candidate)

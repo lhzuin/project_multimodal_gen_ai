@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import time
 from dataclasses import dataclass
 from typing import Literal
 
@@ -26,6 +27,13 @@ class _EngineRequest:
     perspective: chess.Color | None
     mate_score_cp: int
     future: asyncio.Future[object]
+    clear_hash_before_search: bool = False
+
+
+@dataclass
+class _EngineResponse:
+    value: object
+    search_info: dict[str, int | float]
 
 
 class StockfishPool:
@@ -51,6 +59,9 @@ class StockfishPool:
         self._failed = 0
         self._busy = 0
         self._engine_restarts = 0
+        self._engine_ids: dict[int, dict[str, str]] = {}
+        self._engine_pids: dict[int, int] = {}
+        self._search_stats: dict[str, dict[str, float]] = {}
 
     async def start(self) -> None:
         if self._started:
@@ -119,6 +130,7 @@ class StockfishPool:
             perspective=perspective,
             mate_score_cp=mate_score_cp,
             future=future,
+            clear_hash_before_search=self.config.clear_hash_before_search,
         )
         await self._queue.put(request)
         self._submitted += 1
@@ -142,11 +154,16 @@ class StockfishPool:
                         try:
                             if engine is None:
                                 engine = await asyncio.to_thread(self._launch_engine)
+                                self._engine_ids[worker_id] = dict(engine.id)
+                                self._engine_pids[worker_id] = engine.transport.get_pid()
                             result = await asyncio.to_thread(
                                 self._execute, engine, request
                             )
+                            # Aggregate on the event-loop thread, rather than
+                            # mutating shared counters from search threads.
+                            self._record_search(request.kind, result.search_info)
                             if not request.future.done():
-                                request.future.set_result(result)
+                                request.future.set_result(result.value)
                             self._completed += 1
                             error = None
                             break
@@ -196,16 +213,27 @@ class StockfishPool:
         if unsupported:
             engine.quit()
             raise RuntimeError(f"Stockfish does not support options: {unsupported}")
+        if self.config.clear_hash_before_search and "Clear Hash" not in engine.options:
+            engine.quit()
+            raise RuntimeError("Stockfish does not support Clear Hash")
         engine.configure(options)
         return engine
 
     @staticmethod
-    def _execute(engine: chess.engine.SimpleEngine, request: _EngineRequest) -> object:
+    def _execute(engine: chess.engine.SimpleEngine, request: _EngineRequest) -> _EngineResponse:
+        started = time.perf_counter()
+        if request.clear_hash_before_search:
+            engine.configure({"Clear Hash": None})
         if request.kind == "play":
-            result = engine.play(request.board, request.limit.to_chess())
+            result = engine.play(
+                request.board, request.limit.to_chess(), info=chess.engine.INFO_BASIC
+            )
             if result.move is None or result.move not in request.board.legal_moves:
                 raise chess.engine.EngineError("Stockfish returned no legal move")
-            return result.move
+            return _EngineResponse(
+                result.move,
+                StockfishPool._search_info(result.info, time.perf_counter() - started),
+            )
 
         if request.perspective is None:
             raise ValueError("evaluation requests require a perspective")
@@ -223,12 +251,31 @@ class StockfishPool:
             raise chess.engine.EngineError(
                 "Stockfish score could not be converted to centipawns"
             )
-        return EngineEvaluation(
+        evaluation = EngineEvaluation(
             centipawns=int(cp),
             mate=score.mate(),
             depth=None if info.get("depth") is None else int(info["depth"]),
             nodes=None if info.get("nodes") is None else int(info["nodes"]),
         )
+        return _EngineResponse(
+            evaluation,
+            StockfishPool._search_info(info, time.perf_counter() - started),
+        )
+
+    @staticmethod
+    def _search_info(info: dict, elapsed: float) -> dict[str, int | float]:
+        return {
+            "nodes": int(info.get("nodes", 0)),
+            "depth": int(info.get("depth", 0)),
+            "engine_seconds": float(info.get("time", 0.0)),
+            "elapsed_seconds": elapsed,
+        }
+
+    def _record_search(self, kind: str, info: dict[str, int | float]) -> None:
+        stats = self._search_stats.setdefault(kind, {"count": 0.0})
+        stats["count"] += 1
+        for key, value in info.items():
+            stats[key + "_total"] = stats.get(key + "_total", 0.0) + value
 
     async def _close_engine(self, engine: chess.engine.SimpleEngine | None) -> None:
         if engine is None:
@@ -250,8 +297,19 @@ class StockfishPool:
         await asyncio.gather(*self._tasks, return_exceptions=True)
         self._tasks.clear()
 
-    def metrics(self) -> dict[str, int | str]:
+    def metrics(self) -> dict[str, object]:
         return {
+            "configuration": self.config.public_dict(),
+            "engine_ids": dict(self._engine_ids),
+            "worker_pids": dict(self._engine_pids),
+            "searches": {
+                kind: {
+                    **stats,
+                    "nodes_mean": stats["nodes_total"] / stats["count"],
+                    "depth_mean": stats["depth_total"] / stats["count"],
+                }
+                for kind, stats in self._search_stats.items()
+            },
             "name": self.name,
             "workers": self.config.workers,
             "busy_workers": self._busy,

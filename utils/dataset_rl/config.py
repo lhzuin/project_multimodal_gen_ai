@@ -38,9 +38,7 @@ class BuildConfig:
     device: str = "cpu"
     torch_threads: int = 2
     exclusion_openings: tuple[str, ...] = ("utils/opening_suite_large.json",)
-    stockfish: str = (
-        "/Users/luiszuin/Downloads/stockfish/stockfish-macos-m1-apple-silicon"
-    )
+    stockfish: str = "stockfish"
 
     def __post_init__(self) -> None:
         for name in ("train_size", "validation_size", "test_size"):

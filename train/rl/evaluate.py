@@ -49,9 +49,22 @@ def comparison_summary(
         candidate[key]["mean_reward"] - baseline[key]["mean_reward"] for key in baseline
     ]
     delta = statistics.mean(differences)
-    se = statistics.stdev(differences) / math.sqrt(len(differences))
+    groups: dict[str, list[float]] = {}
+    for key, difference in zip(baseline, differences, strict=True):
+        group = baseline[key].get("game_id") or key
+        if (candidate[key].get("game_id") or key) != group:
+            raise ValueError("paired positions have different source-game IDs")
+        groups.setdefault(group, []).append(difference)
+    if len(groups) < 2:
+        raise ValueError("uncertainty needs at least two independent source games")
+    # Cluster-robust SE of the position-weighted mean, allowing unequal numbers
+    # of anchors per source game. With one position per game this is exactly
+    # stdev(differences) / sqrt(N), as in earlier evaluations.
+    residuals = [sum(values) - len(values) * delta for values in groups.values()]
+    se = math.sqrt(len(groups) / (len(groups) - 1) * sum(r * r for r in residuals)) / len(differences)
     return {
         "positions": len(differences),
+        "independent_game_clusters": len(groups),
         "baseline_mean_reward": statistics.mean(
             v["mean_reward"] for v in baseline.values()
         ),
@@ -61,7 +74,7 @@ def comparison_summary(
         "paired_reward_difference": delta,
         "paired_standard_error": se,
         "approximate_95pct_interval": [delta - 1.96 * se, delta + 1.96 * se],
-        "interpretation": "Descriptive normal approximation over position-level differences, not an Elo or full-game strength claim; use a larger sample and multiple seeds.",
+        "interpretation": "Descriptive normal approximation with source-game clustering where IDs are present (otherwise position clustering), not an Elo or full-game strength claim; use a larger sample and multiple seeds.",
     }
 
 
@@ -97,6 +110,7 @@ async def evaluate_policy(
                 "scores_cp": scores,
                 "rewards": rewards,
                 "bucket": prompt.metadata.get("bucket", "unknown"),
+                "game_id": prompt.metadata.get("game_id") or prompt.entry_id,
             }
         print(
             json.dumps(

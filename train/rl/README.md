@@ -82,6 +82,34 @@ rate by 10x. Do not increase the clipping threshold merely to make clipping rare
 RLOO's sampled KL is trajectory-summed over policy decisions, not a per-token
 exact KL; individual samples and batch means can be negative.
 
+RLOO additionally reports raw reward variation separately from KL-regularized
+returns: `reward_zero_variance_groups`, `reward_low_spread_groups` (raw reward
+range below 0.02), `mean_reward_group_spread`, `mean_reward_group_std` (population
+standard deviation within each group, then averaged), and
+`reward_saturation_fraction` (fraction with absolute tanh reward above 0.99;
+zero for linear rewards). `mean_abs_advantage` averages over trajectories, and
+`mean_abs_kl_penalty` averages the absolute trajectory KL cost. These diagnostics
+do not alter the loss. Historical journals cannot reconstruct these new metrics.
+
+RLOO now measures `parameter_update_norm` after the optimizer step and
+`relative_parameter_update_norm` relative to the pre-step norm of parameters
+with gradients. This is actual weight displacement, distinct from the gradient
+norm. It temporarily copies active trainable weights; frozen visual/reference
+weights are not copied. Optimizer behavior is unchanged. Historical journals
+cannot recover a complete update-norm history from the last optimizer state.
+
+When the server publishes search telemetry, training records cumulative
+`server_opponent_nodes_mean_cumulative`, `server_opponent_depth_mean_cumulative`
+and the corresponding evaluator fields. These are cumulative server means,
+not values specific to the latest training batch. Search node budgets and cache
+policy should be kept fixed when comparing experiments.
+
+Set top-level `export_every_batches: 50` alongside `export_weights` to retain
+intermediate policies as `<stem>.step-000050.pt`, etc. The final named export
+remains launcher-owned and full resume checkpoints keep their existing cadence.
+These extra weight exports permit validation-based checkpoint selection; they
+do not automatically run evaluation or select a winner.
+
 ## Read-only held-out evaluation
 
 `python -m train.rl.evaluate --help` compares exported candidate weights with the
@@ -92,8 +120,11 @@ creates an optimizer or writes checkpoints. Sampling temperature, horizon,
 opponent, evaluator and CP scaling come from the experiment config.
 
 It reports per-position reward means, paired differences, standard error, and a
-descriptive normal-approximation interval. Positions, not individual correlated
-rollouts from one position, are the statistical units. Small samples, repeated
+descriptive normal-approximation interval. When `metadata.game_id` is present,
+uncertainty clusters all anchors from the same source game together. Without
+game IDs, each position is its own cluster, preserving the earlier calculation.
+Individual correlated rollouts never count as independent observations. The
+summary needs at least two clusters. Small samples, repeated
 testing on validation, and stochastic engine choices limit inference. A fixed
 seed controls selection/policy sampling but cannot make concurrent UCI engines,
 time-limited searches, or limited-strength opponent choices fully deterministic.

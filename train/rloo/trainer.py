@@ -6,7 +6,7 @@ import torch
 
 from train.rl.contracts import Trajectory
 from train.rl.trainer import OnPolicyTrainer
-from train.rl.optimization import clip_gradients
+from train.rl.optimization import clip_gradients, step_with_update_metrics
 from .config import RLOOConfig
 from .objective import RLOODecision, reinforce_loss, training_items
 
@@ -65,12 +65,13 @@ class RLOOTrainer(OnPolicyTrainer):
                 self.policy.model.parameters(),
                 self.config.max_grad_norm,
             )
-            self.optimizer.step()
+            update_metrics = step_with_update_metrics(self.optimizer)
             self.optimizer_steps += 1
         finally:
             self.optimizer.zero_grad(set_to_none=True)
         return {
             "loss": loss_total,
             **gradient_metrics,
+            **update_metrics,
             "optimizer_steps": float(self.optimizer_steps),
         }

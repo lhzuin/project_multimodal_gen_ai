@@ -108,7 +108,7 @@ histories and checks exact trigger boundaries for all accepted puzzles.
 | `validation.json`, `test.json` | 1,000 positions each; not loaded by training config |
 | `audit.jsonl` | Source row, game identity, alignment, confidence and selection details |
 | `manifest.json`, `build_config.json` | Counts, source/checkpoint/artifact hashes and reproducibility settings |
-| `REPORT.md` | Actual TG2-ready methods, counts and limitations |
+| `REPORT.md` | Generated dataset counts, provenance and limitations |
 | `verification.json` | Replay/contract/disjointness checks and optional smoke-test status |
 | `training_config.yaml` (new builds) | Generated RLOO recipe pointing to `train.json`; experiment presets live under `configs/rl/` |
 

@@ -312,7 +312,7 @@ incomplete group.
 Optional actual-checkpoint/real-Stockfish tests:
 
 ```bash
-RL_STOCKFISH_BIN=/Users/luiszuin/Downloads/stockfish/stockfish-macos-m1-apple-silicon \
+RL_STOCKFISH_BIN=/path/to/stockfish \
 GRPO_REAL_MODELS=1 \
   .venv/bin/python -m unittest train.grpo.tests.test_integration -v
 ```

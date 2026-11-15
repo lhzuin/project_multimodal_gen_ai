@@ -15,6 +15,7 @@ from .config import EnginePoolConfig, SearchLimit, ServiceConfig
 from .coordinator import RolloutCoordinator
 from .engine_pool import StockfishPool
 from .protocol import GameSpec
+from .position_play import play_positions
 
 
 LOGGER = logging.getLogger(__name__)
@@ -113,7 +114,9 @@ class RolloutTCPServer:
                         "error": {"type": type(exc).__name__, "message": str(exc)},
                     }
                 writer.write(
-                    json.dumps(response, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+                    json.dumps(
+                        response, separators=(",", ":"), ensure_ascii=False
+                    ).encode("utf-8")
                     + b"\n"
                 )
                 await writer.drain()
@@ -125,7 +128,11 @@ class RolloutTCPServer:
                 await writer.wait_closed()
 
     async def _write_error(
-        self, writer: asyncio.StreamWriter, request_id: Any, error_type: str, message: str
+        self,
+        writer: asyncio.StreamWriter,
+        request_id: Any,
+        error_type: str,
+        message: str,
     ) -> None:
         response = {
             "id": request_id,
@@ -138,9 +145,21 @@ class RolloutTCPServer:
     async def _dispatch(self, operation: str, payload: Mapping[str, Any]) -> Any:
         if operation == "health":
             return self.coordinator.health()
+        if operation == "play_positions":
+            positions = [
+                self._mapping(value, "position")
+                for value in self._list(payload, "positions")
+            ]
+            return await play_positions(
+                self.coordinator.opponent_pool,
+                positions,
+                max_batch_size=self.coordinator.config.max_batch_size,
+            )
         if operation == "create_games":
             values = self._list(payload, "games")
-            specs = [GameSpec.from_dict(self._mapping(value, "game")) for value in values]
+            specs = [
+                GameSpec.from_dict(self._mapping(value, "game")) for value in values
+            ]
             return await self.coordinator.create_games(specs)
         if operation == "poll_policy_turns":
             return await self.coordinator.poll_policy_turns(
@@ -208,8 +227,12 @@ def _search_limit(args: argparse.Namespace, prefix: str) -> SearchLimit:
 
 
 def _parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Asynchronous Stockfish rollout service")
-    parser.add_argument("--stockfish", required=True, help="path to the Stockfish executable")
+    parser = argparse.ArgumentParser(
+        description="Asynchronous Stockfish rollout service"
+    )
+    parser.add_argument(
+        "--stockfish", required=True, help="path to the Stockfish executable"
+    )
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8765)
     parser.add_argument("--play-workers", type=int, default=2)
@@ -220,15 +243,25 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--eval-hash-mb", type=int, default=128)
     parser.add_argument("--queue-capacity", type=int, default=4096)
     parser.add_argument("--max-batch-size", type=int, default=512)
-    parser.add_argument("--play-movetime-ms", type=int, default=50, help="0 disables this limit")
+    parser.add_argument(
+        "--play-movetime-ms", type=int, default=50, help="0 disables this limit"
+    )
     parser.add_argument("--play-depth", type=int)
     parser.add_argument("--play-nodes", type=int)
-    parser.add_argument("--eval-movetime-ms", type=int, default=100, help="0 disables this limit")
+    parser.add_argument(
+        "--eval-movetime-ms", type=int, default=100, help="0 disables this limit"
+    )
     parser.add_argument("--eval-depth", type=int)
     parser.add_argument("--eval-nodes", type=int)
     parser.add_argument("--limit-strength", action="store_true")
     parser.add_argument("--uci-elo", type=int)
     parser.add_argument("--skill-level", type=int)
+    parser.add_argument(
+        "--restart-attempts",
+        type=int,
+        default=1,
+        help="retries per failed search; use 0 for tournament forfeits",
+    )
     parser.add_argument("--mate-score-cp", type=int, default=100_000)
     parser.add_argument("--reward-scale-cp", type=float, default=400.0)
     parser.add_argument("--seed", type=int, default=0)
@@ -257,6 +290,7 @@ async def _run(args: argparse.Namespace) -> None:
         "limit_strength": args.limit_strength,
         "uci_elo": args.uci_elo,
         "skill_level": args.skill_level,
+        "restart_attempts": args.restart_attempts,
     }
     opponent_pool = StockfishPool(
         EnginePoolConfig(
