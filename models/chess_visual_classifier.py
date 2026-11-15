@@ -1,4 +1,3 @@
-import torch
 import torch.nn as nn
 from models.chess_vit import ChessVit
 

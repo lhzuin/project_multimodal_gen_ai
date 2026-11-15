@@ -1,32 +1,13 @@
 #!/usr/bin/env python3
-"""
-Plot teacher vs model policy distributions on random positions from the distillation DB.
+"""Plot teacher, encoder and decoder policy distributions on sampled DB positions.
 
-For each sampled position:
-  1) Teacher distribution: softmax(cp/mate scores with tau) over the stored top-K moves.
-  2) Model distribution: softmax over legal moves using encoder's (from,to) logits (+ promo logits factor).
-
-Then we plot both distributions on the union:
-  union = teacher_topK ∪ model_top10
-
-Usage example:
-  python plot_distill_encoder_distributions.py \
-    --cfg distillation_encoder_v3.yaml \
-    --ckpt checkpoints/distill_encoder_v3_mixed.pt \
-    --n 12 \
-    --outdir debug_plots \
-    --device cuda
-
-Notes:
-- This script imports "private" helpers from distillation_db.py (_MultiShardIndex, _scores_to_probs).
-  That’s deliberate to reuse your infrastructure with minimal duplication.
-- You may need to adjust imports depending on your repo layout (models.* vs local files).
+Run ``python -m utils.plots.plot_prob_distributions --help`` from the project root.
+The existing distillation readers provide teacher top-K distributions and histories.
 """
 
 from omegaconf import OmegaConf
 import os
 import json
-import math
 import argparse
 from pathlib import Path
 
@@ -35,9 +16,7 @@ import torch
 import matplotlib.pyplot as plt
 import chess
 
-from omegaconf import OmegaConf
-
-# ---- repo-local imports (adjust if needed) ----
+# Shared distillation readers and model definitions.
 from dataset.distillation_db import DistillationEncoderDataset, DistillationShardReader, _MultiShardIndex, _scores_to_probs
 from models.chess_encoder_player import ChessEncoderPlayerV2
 from models.chess_decoder_player import ChessDecoderPlayer

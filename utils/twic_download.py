@@ -1,12 +1,11 @@
 import os
-import re
 import zipfile
 from pathlib import Path
-from typing import Iterable, List, Optional
+from typing import Iterable, List
 
 import requests
 
-TWIC_ZIP_URL = "https://theweekinchess.com/zips/twic{n}g.zip"  # url pattern  [oai_citation:1‡Gist](https://gist.github.com/roryk/ba72531b3b0f423dc8b9bd69beb63f8e?utm_source=chatgpt.com)
+TWIC_ZIP_URL = "https://theweekinchess.com/zips/twic{n}g.zip"  # url pattern
 
 
 def download_file(url: str, dst_path: str, chunk_size: int = 1 << 20) -> None:

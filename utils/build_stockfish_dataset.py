@@ -6,23 +6,13 @@ High-level convenience script/class to:
   3) Build a *samples* file (game_idx, ply_idx)
   4) Build a sharded SQLite distillation DB with Stockfish top-K per sampled position
 
-This file intentionally DOES NOT change your existing training datasets.
-It only adds the new distillation database logic.
+PGN, index, sample and output paths are configured explicitly on the CLI.
 """
 
 from __future__ import annotations
 
 import os
 from dataclasses import dataclass
-
-"""Note on imports
-
-In your repo, these helper modules might live either at top-level (e.g.
-twic_download.py, offsets.py, dataset.py) or inside a package (e.g.
-dataset/twic_download.py, dataset/offsets.py, dataset/dataset.py).
-
-To avoid forcing you to rearrange files, we use small import fallbacks.
-"""
 
 from utils.twic_download import download_twic_zips, build_merged_pgn_from_zips, twic_range 
 
@@ -98,21 +88,36 @@ class BuildStockfishDistillationDB:
         return builder.build(overwrite=overwrite)
 
 
+def main(argv=None):
+    """Prepare a corpus and build sharded teacher data with explicit budgets."""
+    import argparse
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--start-week", type=int, required=True)
+    parser.add_argument("--end-week", type=int, required=True)
+    for field_name, flag, value_type in (
+        ("out_pgn_path", "pgn", str), ("out_index_path", "index", str),
+        ("samples_path", "samples", str), ("sample_ratio", "sample-ratio", float),
+        ("max_positions_per_game", "max-positions-per-game", int),
+        ("seed", "seed", int), ("movetime_ms", "movetime-ms", int),
+        ("k", "top-k", int), ("min_depth", "min-depth", int),
+        ("out_db_dir", "out-dir", str), ("num_workers", "workers", int),
+    ):
+        parser.add_argument("--" + flag, dest=field_name, type=value_type,
+                            default=StockfishDistillationBuildConfig.__dataclass_fields__[field_name].default)
+    parser.add_argument("--stockfish", dest="engine_path", default=os.environ.get("STOCKFISH_EXECUTABLE", "stockfish"))
+    parser.add_argument("--skip-prepare", action="store_true", help="Reuse the supplied PGN/index without downloading")
+    parser.add_argument("--overwrite", action="store_true")
+    args = parser.parse_args(argv)
+    values = vars(args).copy()
+    skip_prepare, overwrite = values.pop("skip_prepare"), values.pop("overwrite")
+    builder = BuildStockfishDistillationDB(StockfishDistillationBuildConfig(**values))
+    if not skip_prepare:
+        builder.prepare_pgn()
+    else:
+        ensure_offsets(builder.cfg.out_pgn_path, builder.cfg.out_index_path)
+    builder.prepare_samples()
+    print(f"Distillation metadata: {builder.build_db(overwrite=overwrite)}")
+
+
 if __name__ == "__main__":
-    # Example usage (edit values in-place):
-    cfg = StockfishDistillationBuildConfig(
-        start_week=1479,
-        end_week=1479,
-        sample_ratio=0.15,
-        max_positions_per_game=32,
-        engine_path=os.environ.get("STOCKFISH_PATH", "stockfish"),
-        movetime_ms=500,
-        k=5,
-        num_workers=4,
-        out_db_dir="distill_db79",
-    )
-    b = BuildStockfishDistillationDB(cfg)
-    b.prepare_pgn()
-    b.prepare_samples()
-    meta = b.build_db(overwrite=False)
-    print(f"[distill_db] meta: {meta}")
+    main()

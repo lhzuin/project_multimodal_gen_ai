@@ -1,8 +1,6 @@
 import argparse
 import random
-import math
-from dataclasses import dataclass
-from typing import Dict, Tuple, List, Optional
+from typing import Dict, Tuple
 
 import numpy as np
 import torch
@@ -337,9 +335,9 @@ def main():
         if not sample.get("valid", False):
             print(f"\n[trial {t}] sample idx {idx} invalid; skipping")
             continue
-        print(f"\n\n==============================")
+        print("\n\n==============================")
         print(f"TRIAL {t}  (dataset idx={idx})")
-        print(f"==============================")
+        print("==============================")
         run_one_sample_checks(model, sample, device=device)
 
 if __name__ == "__main__":

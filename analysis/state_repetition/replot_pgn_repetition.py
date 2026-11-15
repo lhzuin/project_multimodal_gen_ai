@@ -74,8 +74,8 @@ def plot_repetition_from_csv(
 
     if not filtered:
         raise ValueError(
-            f"No ply remains after filtering. "
-            f"Try lowering --min_positions_per_ply or increasing --max_ply."
+            "No ply remains after filtering. "
+            "Try lowering --min_positions_per_ply or increasing --max_ply."
         )
 
     plies = [row["ply"] for row in filtered]
