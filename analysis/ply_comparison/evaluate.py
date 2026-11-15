@@ -39,10 +39,10 @@ from models.chess_encoder_player import ChessEncoderPlayerV2
 
 ROOT = Path(__file__).resolve().parents[2]
 CHECKPOINTS = {
-    "encoder_baseline": ROOT / "chess_encoder_seq_v1_07_03_FINAL.pt",
-    "encoder_balanced": ROOT / "chess_encoder_seq_balanced_v1.best.pt",
-    "decoder_baseline": ROOT / "chess_llm_decoder_v12.pt",
-    "decoder_balanced": ROOT / "chess_llm_decoder_balanced_v1_final.pt",
+    "encoder_baseline": ROOT / "checkpoints/chess_encoder_seq_v1_07_03_FINAL.pt",
+    "encoder_balanced": ROOT / "checkpoints/chess_encoder_seq_balanced_v1.best.pt",
+    "decoder_baseline": ROOT / "checkpoints/chess_llm_decoder_v12.pt",
+    "decoder_balanced": ROOT / "checkpoints/chess_llm_decoder_balanced_v1_final.pt",
 }
 PER_MOVE_FIELDS = (
     "game_id", "ply", "game_plies", "bucket", "relative_bucket", "model_id", "twic_issue", "date",
@@ -113,7 +113,8 @@ def load_models(device: torch.device, tokenizer_path: Path):
     return result
 
 
-def game_examples(game: chess.pgn.Game, game_id: int, tokenizer, *, max_context: int = 256):
+def game_examples(game: chess.pgn.Game, game_id: int, tokenizer, *, max_context: int = 256,
+                  include_board_grid: bool = True):
     issue = int(game.headers["TWICIssue"])
     if not 1662 <= issue <= 1667:
         raise ValueError(f"game {game_id}: unexpected TWIC issue {issue}")
@@ -151,7 +152,7 @@ def game_examples(game: chess.pgn.Game, game_id: int, tokenizer, *, max_context:
             date=game.headers.get("Date", ""), white_elo=white_elo,
             black_elo=black_elo, fen=board.fen(), target=move,
             legal_moves=list(board.legal_moves),
-            labels64=board_to_grid_ids(board).reshape(-1),
+            labels64=board_to_grid_ids(board).reshape(-1) if include_board_grid else None,
             turn=int(board.turn == chess.WHITE), castling=castling,
             ep_square=board.ep_square if board.ep_square is not None else -1,
             move_ids=move_ids[start:].copy(), piece_ids=piece_ids[start:].copy(),
@@ -237,9 +238,10 @@ def cached_decoder_logits(examples: list[Example], models, device):
     pieces = torch.tensor([prefix.piece_ids], dtype=torch.long, device=device)
     turn = torch.tensor([prefix.start_turn], dtype=torch.long, device=device)
     result = {}
-    for model_id in ("decoder_baseline", "decoder_balanced"):
-        output = models[model_id](input_ids=ids, piece_input_ids=pieces,
-                                  start_turn=turn)
+    for model_id, model in models.items():
+        if not model_id.startswith("decoder"):
+            continue
+        output = model(input_ids=ids, piece_input_ids=pieces, start_turn=turn)
         result[model_id] = output["logits"][0].detach().float().cpu()
     return result
 

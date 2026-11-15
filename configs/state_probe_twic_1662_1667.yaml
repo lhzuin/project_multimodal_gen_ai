@@ -7,12 +7,12 @@ paths:
   tokenizer: tokenizers/chess_uci_vocab.json
   comparison_output: outputs/twic_1662_1667
   output_dir: outputs/twic_1662_1667_state_probe
-  reference_pgn: processed_games/processed_games/by_category/twic_large_5x_classic.pgn
-  reference_index: processed_games/processed_games/by_category/twic_large_5x_classic_index.json
+  reference_pgn: processed_games/by_category/twic_large_5x_classic.pgn
+  reference_index: processed_games/by_category/twic_large_5x_classic_index.json
 
 models:
-  decoder_baseline: chess_llm_decoder_v12.pt
-  decoder_balanced: chess_llm_decoder_balanced_v1_final.pt
+  decoder_baseline: checkpoints/chess_llm_decoder_v12.pt
+  decoder_balanced: checkpoints/chess_llm_decoder_balanced_v1_final.pt
 
 # Counts are per TWIC issue. The complete 15% test pool remains represented in
 # splits.csv; these selected counts define the CPU-first probe experiment.

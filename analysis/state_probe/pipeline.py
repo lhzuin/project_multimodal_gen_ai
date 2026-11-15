@@ -11,7 +11,6 @@ from collections import Counter, defaultdict
 import csv
 from datetime import datetime, timezone
 import hashlib
-import io
 import json
 import math
 import os
@@ -27,7 +26,7 @@ from torch.utils.data import DataLoader, TensorDataset, WeightedRandomSampler
 
 from analysis.ply_comparison.aggregate import bucket_for_ply
 from analysis.state_probe.core import (
-    BloomIndex, CONDITIONS, DECODER_CHECKPOINTS, GENERATED_BUCKETS, MODEL_IDS,
+    BloomIndex, CONDITIONS, MODEL_IDS,
     ROOT, StateProbe, atomic_json, board_target, build_splits, choose_device,
     config_hash, ensemble_metrics, extract_condition_batch, generated_bucket,
     history_tokens, load_config, load_decoders, normalized_position,

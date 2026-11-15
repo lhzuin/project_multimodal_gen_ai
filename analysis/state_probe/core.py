@@ -2,9 +2,7 @@
 
 from __future__ import annotations
 
-from collections import Counter
 import csv
-from dataclasses import dataclass
 import hashlib
 import io
 import json
@@ -23,7 +21,6 @@ from torch import nn
 import torch.nn.functional as F
 import yaml
 
-from analysis.ply_comparison.aggregate import bucket_for_ply
 from analysis.ply_comparison.evaluate import ROOT, load_weights, sha256
 from dataset.offsets import load_pgn_offsets
 from dataset.renderer import board_to_grid_ids
@@ -31,8 +28,8 @@ from models.chess_decoder_player import ChessDecoderPlayer
 
 
 DECODER_CHECKPOINTS = {
-    "decoder_baseline": ROOT / "chess_llm_decoder_v12.pt",
-    "decoder_balanced": ROOT / "chess_llm_decoder_balanced_v1_final.pt",
+    "decoder_baseline": ROOT / "checkpoints/chess_llm_decoder_v12.pt",
+    "decoder_balanced": ROOT / "checkpoints/chess_llm_decoder_balanced_v1_final.pt",
 }
 MODEL_IDS = tuple(DECODER_CHECKPOINTS)
 LAYERS = (3, 6, 9, 12)
