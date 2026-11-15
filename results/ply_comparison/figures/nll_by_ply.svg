@@ -1,0 +1,64 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1050" height="620" viewBox="0 0 1050 620">
+<rect width="100%" height="100%" fill="white"/>
+<g font-family="Arial, Helvetica, sans-serif">
+<text x="525.0" y="43.0" font-size="23" fill="#263443" text-anchor="middle" font-weight="bold">Human-move legal NLL by ply band</text>
+<text x="27.0" y="300.0" font-size="16" fill="#263443" text-anchor="start" font-weight="normal">Legal NLL</text>
+<line x1="105" y1="495.0" x2="990" y2="495.0" stroke="#e4e9ed"/>
+<text x="93.0" y="499.0" font-size="12" fill="#263443" text-anchor="end" font-weight="normal">0.94</text>
+<line x1="105" y1="416.0" x2="990" y2="416.0" stroke="#e4e9ed"/>
+<text x="93.0" y="420.0" font-size="12" fill="#263443" text-anchor="end" font-weight="normal">1.19</text>
+<line x1="105" y1="337.0" x2="990" y2="337.0" stroke="#e4e9ed"/>
+<text x="93.0" y="341.0" font-size="12" fill="#263443" text-anchor="end" font-weight="normal">1.44</text>
+<line x1="105" y1="258.0" x2="990" y2="258.0" stroke="#e4e9ed"/>
+<text x="93.0" y="262.0" font-size="12" fill="#263443" text-anchor="end" font-weight="normal">1.69</text>
+<line x1="105" y1="179.0" x2="990" y2="179.0" stroke="#e4e9ed"/>
+<text x="93.0" y="183.0" font-size="12" fill="#263443" text-anchor="end" font-weight="normal">1.94</text>
+<line x1="105" y1="100.0" x2="990" y2="100.0" stroke="#e4e9ed"/>
+<text x="93.0" y="104.0" font-size="12" fill="#263443" text-anchor="end" font-weight="normal">2.19</text>
+<line x1="105" y1="100" x2="105" y2="495" stroke="#586676"/>
+<line x1="105" y1="495" x2="990" y2="495" stroke="#586676"/>
+<text x="160.0" y="519.0" font-size="13" fill="#263443" text-anchor="middle" font-weight="normal">0–19</text>
+<text x="315.0" y="519.0" font-size="13" fill="#263443" text-anchor="middle" font-weight="normal">20–39</text>
+<text x="470.0" y="519.0" font-size="13" fill="#263443" text-anchor="middle" font-weight="normal">40–59</text>
+<text x="625.0" y="519.0" font-size="13" fill="#263443" text-anchor="middle" font-weight="normal">60–79</text>
+<text x="780.0" y="519.0" font-size="13" fill="#263443" text-anchor="middle" font-weight="normal">80–99</text>
+<text x="935.0" y="519.0" font-size="13" fill="#263443" text-anchor="middle" font-weight="normal">100+</text>
+<text x="545.0" y="553.0" font-size="14" fill="#263443" text-anchor="middle" font-weight="normal">Ply before the target move</text>
+<polyline points="160.0,432.5 315.0,327.5 470.0,321.0 625.0,337.6 780.0,351.0 935.0,325.6" fill="none" stroke="#325b9b" stroke-width="3"/>
+<circle cx="160.0" cy="432.5" r="4" fill="#325b9b"/>
+<circle cx="315.0" cy="327.5" r="4" fill="#325b9b"/>
+<circle cx="470.0" cy="321.0" r="4" fill="#325b9b"/>
+<circle cx="625.0" cy="337.6" r="4" fill="#325b9b"/>
+<circle cx="780.0" cy="351.0" r="4" fill="#325b9b"/>
+<circle cx="935.0" cy="325.6" r="4" fill="#325b9b"/>
+<polyline points="160.0,436.1 315.0,342.7 470.0,342.6 625.0,361.4 780.0,376.7 935.0,359.2" fill="none" stroke="#3b9d78" stroke-width="3"/>
+<circle cx="160.0" cy="436.1" r="4" fill="#3b9d78"/>
+<circle cx="315.0" cy="342.7" r="4" fill="#3b9d78"/>
+<circle cx="470.0" cy="342.6" r="4" fill="#3b9d78"/>
+<circle cx="625.0" cy="361.4" r="4" fill="#3b9d78"/>
+<circle cx="780.0" cy="376.7" r="4" fill="#3b9d78"/>
+<circle cx="935.0" cy="359.2" r="4" fill="#3b9d78"/>
+<polyline points="160.0,438.6 315.0,244.4 470.0,156.4 625.0,164.5 780.0,206.1 935.0,240.9" fill="none" stroke="#c16a39" stroke-width="3"/>
+<circle cx="160.0" cy="438.6" r="4" fill="#c16a39"/>
+<circle cx="315.0" cy="244.4" r="4" fill="#c16a39"/>
+<circle cx="470.0" cy="156.4" r="4" fill="#c16a39"/>
+<circle cx="625.0" cy="164.5" r="4" fill="#c16a39"/>
+<circle cx="780.0" cy="206.1" r="4" fill="#c16a39"/>
+<circle cx="935.0" cy="240.9" r="4" fill="#c16a39"/>
+<polyline points="160.0,429.4 315.0,241.6 470.0,161.0 625.0,173.2 780.0,218.2 935.0,254.2" fill="none" stroke="#9752a0" stroke-width="3"/>
+<circle cx="160.0" cy="429.4" r="4" fill="#9752a0"/>
+<circle cx="315.0" cy="241.6" r="4" fill="#9752a0"/>
+<circle cx="470.0" cy="161.0" r="4" fill="#9752a0"/>
+<circle cx="625.0" cy="173.2" r="4" fill="#9752a0"/>
+<circle cx="780.0" cy="218.2" r="4" fill="#9752a0"/>
+<circle cx="935.0" cy="254.2" r="4" fill="#9752a0"/>
+<line x1="132" y1="586" x2="154" y2="586" stroke="#325b9b" stroke-width="4"/>
+<text x="160.0" y="591.0" font-size="12" fill="#263443" text-anchor="start" font-weight="normal">Encoder baseline</text>
+<line x1="357" y1="586" x2="379" y2="586" stroke="#3b9d78" stroke-width="4"/>
+<text x="385.0" y="591.0" font-size="12" fill="#263443" text-anchor="start" font-weight="normal">Encoder balanced</text>
+<line x1="582" y1="586" x2="604" y2="586" stroke="#c16a39" stroke-width="4"/>
+<text x="610.0" y="591.0" font-size="12" fill="#263443" text-anchor="start" font-weight="normal">Decoder baseline</text>
+<line x1="807" y1="586" x2="829" y2="586" stroke="#9752a0" stroke-width="4"/>
+<text x="835.0" y="591.0" font-size="12" fill="#263443" text-anchor="start" font-weight="normal">Decoder balanced</text>
+</g>
+</svg>

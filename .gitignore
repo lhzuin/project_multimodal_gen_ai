@@ -1,20 +1,65 @@
+# Python environments and caches
 .venv/
 venv/
-venv312/
-*.pyc
-*.zip
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+*.egg-info/
+build/
+dist/
+
+# Local settings and credentials
+.DS_Store
+.env
+.env.*
+!.env.example
+.aws/
+.codex/
+.worktrees/
+~$*
+
+# Data, checkpoints, run journals and generated artifacts
+/checkpoints/
+/processed_games/
+/twic_zips/
+/outputs/
+/logs/
+/tournament_out/
+/wandb/
+/merged_distill/
+/distill_db/
+/debug_plots*/
+/distill_plots*/
+/teacher_outputs/
+/tmp/
 *.pt
+*.pth
+*.ckpt
 *.pgn
-*.png
-*.mp4
-*.mov
-*.pdf
+*.zip
 *.bin
 *.npy
+*.npz
 *.sqlite*
-outputs/
-distill_db/
-__pycache__/  
+*.log
+*.mp4
+*.mov
 
-.DS_Store
-**/.DS_Store
+# Rebuildable caches and opening suites
+/*_index.json
+/*_samples*.json
+/dataset/games_samples_*.json
+/utils/opening_suite*.json
+/bucket_summary.csv
+/manifest.json
+/twic_1662_1667_state_probe
+
+# Figures belong in generated output folders; keep source sprites and curated results.
+*.png
+*.pdf
+!dataset/sprites/**/*.png
+!results/**/*.png
+!results/**/*.pdf

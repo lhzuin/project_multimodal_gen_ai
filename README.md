@@ -1,561 +1,134 @@
-# Multimodal Chess Project
+# Chessformer
 
-This repository contains the full training, evaluation, and inference pipeline for the chess models developed in the project. It includes data preparation utilities, dataset code, model definitions, training entry points, tournament evaluation tools, UCI engines for GUI play, and plotting scripts used for analysis and report figures.
+Small transformer models for human chess move prediction and play. The project
+compares a board-based encoder with a causal decoder over annotated move histories,
+with supervised learning, balanced supervision, Stockfish distillation and RL.
+A separate vision transformer recognizes pieces on rendered boards.
 
-The project is organized around three main model families:
+The code includes training, UCI play, paired tournaments, held-out move prediction,
+board-state probes and corpus audits. The vision model is evaluated separately;
+the main policy experiments use explicit boards or recorded move histories.
 
-- **ViT** for board-state perception from rendered board images
-- **Encoder** for next-move prediction from explicit board representations
-- **Decoder** for next-move prediction from move history only
+## Start here
 
-The training workflow relies on a PGN-based corpus, random-access game indexing, sampled position files for board-image datasets, and configuration-driven training scripts.
-
-## Repository structure
-
-The project is organized by function.
-
-```text
-project_multimodal_gen_ai/
-├── checkpoints/        # trained model checkpoints
-├── configs/            # training and evaluation configurations
-├── dataset/            # datasets, collate functions, rendering, augmentations, sprites, sanity checks
-├── models/             # model definitions
-├── processed_games/    # merged PGNs, PGN indices, processed training corpora
-├── tokenizers/         # tokenizer files for decoder models
-├── train/              # training entry points
-├── twic_zips/          # raw TWIC zip archives
-├── utils/              # data-preparation, tournament, UCI, plotting, and helper scripts
-├── outputs/            # training outputs and logs
-├── tournament_out/     # tournament PGNs, summaries, and JSONL outputs
-├── debug_plots*/       # analysis and debugging visualizations
-└── README.md
-```
-
-### What is stored where
-
-- `configs/` contains the experiment configurations used to train the final project models and intermediate variants.
-- `dataset/` contains all dataset logic, board rendering, augmentations, PGN indexing helpers, collate functions, and the sampled positions JSON used by the board-image pipeline.
-- `models/` contains the ViT, encoder, decoder, tokenizer, and related model components.
-- `processed_games/` contains merged PGNs and their byte-offset indices, as well as larger processed corpora used by different training branches.
-- `tokenizers/` contains the UCI tokenizer vocabulary used by the decoder.
-- `train/` contains the main training entry points.
-- `train/grpo/` provides modular policy-only GRPO training, a selected-position
-  dataset contract, and standalone YAML launch configs under `configs/rl/`; see [its guide](train/grpo/README.md).
-- `train/rloo/` provides the chosen RLOO loop and a [method comparison](train/rloo/README.md).
-- `train/rl/` holds the shared RL policies, contracts, rollout collector, and lifecycle.
-- `utils/dataset_rl/` builds and verifies the [mixed Lichess RL dataset](utils/dataset_rl/README.md),
-  including trigger alignment, frozen-policy confidence filtering, and TG2 provenance reports.
-- `rl_stockfish_service/` provides the asynchronous Stockfish rollout API used by
-  the RL trainers; see [its contract and startup guide](rl_stockfish_service/README.md).
-- `utils/` contains preparation scripts, tournament tools, opening-book generation, Stockfish-data helpers, plotting utilities, and UCI engines.
-- `checkpoints/` stores trained checkpoints.
-- `tournament_out/` stores tournament artifacts such as PGNs and summary files.
-- `outputs/` stores training outputs and run directories.
-- `twic_zips/` stores downloaded raw TWIC archives so they can be reused across runs.
-
-## Development flow and best practices
-
-### Run scripts as modules
-
-This repository is structured as Python packages. The recommended way to run scripts is from the repository root with `python -m`.
-
-Examples:
+Use Python 3.12 and run commands from the repository root:
 
 ```bash
-python -m utils.prepare_training_files --project-root .
-python -m dataset.sanity_test
-python -m train.train_vit_v2
-```
-
-This keeps imports consistent across the project and avoids path issues.
-
-### Keep raw, processed, and generated artifacts separated
-
-A practical workflow is:
-
-- keep raw TWIC archives in `twic_zips/`
-- keep merged and indexed PGNs in `processed_games/`
-- keep sampled board positions in `dataset/`
-- keep checkpoints in `checkpoints/`
-- keep tournament outputs in `tournament_out/`
-- keep analysis plots in dedicated plot folders
-
-### Prefer configuration-driven runs
-
-Training and evaluation settings should come from files in `configs/`. When a script supports config selection, prefer running it with the intended config explicitly. Otherwise, the script should use its default final project configuration.
-
-### Reuse existing artifacts whenever possible
-
-Before rebuilding large files, check whether the repository already contains the required data:
-
-- existing TWIC zip archives in `twic_zips/`
-- existing merged PGNs in `processed_games/`
-- existing sampled position files in `dataset/`
-- existing opening suites in `utils/`
-
-This saves time and keeps experiments reproducible.
-
-### Validate the data pipeline before training
-
-Always run the sanity test after generating or modifying the training artifacts. This catches dataset, indexing, rendering, and collate issues before long training runs.
-
-## Environment setup
-
-Create a virtual environment from the repository root and install the dependencies.
-
-```bash
-python -m venv .venv
+python3.12 -m venv .venv
 source .venv/bin/activate
-pip install -r requirements.txt
+python -m pip install -r requirements.txt
+python -m unittest discover -v
 ```
 
-All commands below assume they are run from the repository root inside the project environment.
+On Windows, activate with `.venv\Scripts\Activate.ps1`. Install a PyTorch build
+suited to your hardware. Stockfish is a separate UCI executable: put it on `PATH`,
+or set `STOCKFISH_EXECUTABLE` for RL configurations that use `executable: stockfish`.
+Tournament commands accept its path through `--stockfish`.
 
-## Core training artifacts
+Tests use small generated games and models. Tests requiring Stockfish or trained
+weights are opt-in; see [development](docs/development.md). A fresh clone contains
+source, configurations, the tokenizer, piece sprites and compact saved results.
+Prepare the corpora and supply checkpoints before training or model evaluation.
 
-Three files are required before running the board-image and board-state training pipelines:
+## Project layout
 
-- `processed_games/games.pgn`
-- `processed_games/games_index.json`
-- `dataset/games_samples_*.json`
+| Directory | Responsibility |
+|---|---|
+| `dataset/` | PGN datasets, collators, board rendering and frozen balancing-plan reader |
+| `models/` | Vision, encoder and decoder architectures; checkpoint construction |
+| `train/` | Supervised and distillation trainers; shared training utilities |
+| `train/rl/` | Policies, rollouts, checkpoint lifecycle, logging and held-out RL evaluation |
+| `train/rloo/`, `train/grpo/` | Algorithm-specific objectives and updates |
+| `rl_stockfish_service/` | Bounded Stockfish workers and local/TCP rollout API |
+| `analysis/` | Move prediction, decoder-state probes and corpus diagnostics |
+| `utils/` | Data preparation, UCI engines, tournaments and plotting |
+| `configs/` | Training recipes and analysis configurations |
+| `docs/` | Architecture, runtime contracts and usage guides |
+| `results/` | Curated small tables, figures and provenance for saved experiments |
 
-These are used as follows:
+Large artifacts are local: corpora in `processed_games/`, weights in `checkpoints/`,
+evaluation databases in `outputs/`, tournaments in `tournament_out/`, and journals
+in `logs/` or `wandb/`. These folders are excluded from Git.
 
-- the PGN stores the merged games
-- the PGN index enables random access to individual games
-- the sampled positions JSON fixes which positions are extracted from each game for board-based datasets
+## Prepare data
 
-## Step 1 — Prepare the training files
-
-Generate the main training artifacts with:
-
-```bash
-python -m utils.prepare_training_files \
-  --project-root . \
-  --twic-start 1484 \
-  --twic-end 1633
-```
-
-By default, this will:
-
-- reuse or create `processed_games/games.pgn`
-- reuse or create `processed_games/games_index.json`
-- reuse or create `dataset/games_samples_s42_r0.1_m32.json`
-
-The preparation script is aligned with the repository layout:
-
-- merged PGNs and byte offsets go into `processed_games/`
-- the samples JSON goes into `dataset/`
-- TWIC zip files are expected in `twic_zips/`
-
-### What the preparation step does
-
-1. reuses an existing merged PGN if present
-2. otherwise reuses or downloads the requested TWIC zip files
-3. merges the TWIC PGNs into one file
-4. builds the random-access byte-offset index
-5. instantiates `ChessGameSampleDataset` to create the sampled positions file
-
-### Useful variants
-
-Reuse an existing merged PGN directly:
+Build a merged TWIC corpus, random-access index and sampled board positions:
 
 ```bash
-python -m utils.prepare_training_files \
-  --project-root . \
-  --pgn-path processed_games/games_xl.pgn \
-  --pgn-name games.pgn
-```
-
-Use existing TWIC zips only, without downloading anything new:
-
-```bash
-python -m utils.prepare_training_files \
-  --project-root . \
-  --twic-start 1484 \
-  --twic-end 1633 \
-  --skip-download \
-  --force-rebuild-pgn
-```
-
-Force a rebuild of index and samples:
-
-```bash
-python -m utils.prepare_training_files \
-  --project-root . \
-  --force-rebuild-index \
-  --force-rebuild-samples
-```
-
-## Step 2 — Sanity-check the dataset pipeline
-
-After preparing the files, run:
-
-```bash
+python -m utils.prepare_training_files --project-root . --twic-start 1484 --twic-end 1633
 python -m dataset.sanity_test
 ```
 
-This verifies that the pipeline can:
+The sequence trainers consume PGNs and indices directly. Vision training also
+uses a sampled-position JSON. Configure the actual paths in the selected YAML:
+different recipes use different corpus sizes. See [data preparation](docs/data.md)
+and [event-category corpora](docs/dataset_by_category.md).
 
-- load `processed_games/games.pgn`
-- load `processed_games/games_index.json`
-- load `dataset/games_samples_s42_r0.1_m32.json`
-- build at least one dataloader batch
-- validate tensor shapes and value ranges
-- render a few example positions
+## Train
 
-This step should be part of the standard workflow whenever the dataset, samples, or rendering code changes.
-
-## Configs and default behavior
-
-Training configs are stored in `configs/`.
-
-Examples currently present in the repository include:
-
-- `configs/chess_classifier_vit_v2.yaml`
-- `configs/chess_encoder_seq_v2.yaml`
-- `configs/chess_decoder_player_v12.yaml`
-- `configs/distillation_encoder_v9.yaml`
-
-The commands below are written with the final project configurations in mind. When supported by the training entry point, prefer passing the desired config explicitly.
-
-## Step 3 — Train the ViT branch
-
-The ViT branch is the visual front-end. It learns to recover board information from rendered board images under augmentation and style variation.
-
-Run:
+Supervised trainers use Hydra; `--config-name` selects a recipe:
 
 ```bash
-python -m train.train_vit_v2
-```
-
-If the training entry point supports explicit config selection:
-
-```bash
-python -m train.train_vit_v2 --config-name chess_classifier_vit_v2
-```
-
-## Step 4 — Train the supervised encoder
-
-The supervised encoder is the main board-based policy model. It predicts the next move from an explicit board representation.
-
-Run:
-
-```bash
-python -m train.train_encoder_seq
-```
-
-Recommended final config:
-
-```bash
+python -m train.train_vit_v2 --config-name chess_classifier_vit_v2_stats
 python -m train.train_encoder_seq --config-name chess_encoder_seq_v2
-```
-
-## Step 5 — Train the decoder
-
-The decoder predicts the next move from move history only, using the UCI tokenizer and move-sequence modeling.
-
-Run:
-
-```bash
-python -m train.train_chessdecoder
-```
-
-Recommended final config:
-
-```bash
 python -m train.train_chessdecoder --config-name chess_decoder_player_v12
 ```
 
-### Checkpoints and crash recovery
-
-The encoder-sequence and decoder trainers save three kinds of files under
-`checkpoints/`:
-
-- `<experiment>.latest.pt` is the atomic, resumable latest checkpoint. It
-  contains the model, optimizer, scheduler, gradient scaler, training cursor,
-  early-stopping state, RNG states, resolved config, and W&B run ID.
-- `<experiment>.best.pt` contains only the best model weights for evaluation.
-- `<experiment>.<stage>.epoch-NNNN.pt` files are rotating, weight-only snapshots.
-  `checkpoint_keep_last` controls how many are retained.
-
-`SIGINT`, `SIGTERM`, and (on Unix/macOS) `SIGUSR1` request a graceful stop. The
-trainer waits for the next optimizer boundary, writes the resumable checkpoint,
-and exits without saving a model/optimizer pair from a partial accumulation.
-
-Resume the latest checkpoint with the normal config and one command-line
-override; no continuation YAML is needed:
-
-```bash
-python -m train.train_encoder_seq checkpoint_load_path=auto
-python -m train.train_chessdecoder checkpoint_load_path=auto
-```
-
-To resume a specifically named full checkpoint, pass its path instead. Passing
-a weight-only snapshot or an older legacy state dict is also supported, but is
-treated as a warm start because optimizer/scheduler progress is not available:
-
-```bash
-python -m train.train_encoder_seq \
-  checkpoint_load_path=/absolute/path/to/checkpoint.pt
-```
-
-Use `device=auto` (the default) for CUDA, Apple MPS, then CPU selection, or set
-`device=cuda:0`, `device=mps`, or `device=cpu` explicitly. If W&B cannot be
-initialized after bounded retries, metrics are written in offline mode and can
-later be uploaded with `wandb sync <run-directory>`; checkpointing and training
-continue independently of logging failures.
-
-## Step 6 — Train the distilled encoder
-
-The distilled encoder uses offline teacher supervision from Stockfish top moves rather than only the human next move.
-
-Run:
-
-```bash
-python -m train.distillation_encoder
-```
-
-Recommended final config:
-
-```bash
-python -m train.distillation_encoder --config-name distillation_encoder_v9
-```
-
-## Step 7 — Generate the opening suite
-
-Tournament evaluation uses a curated opening suite. Generate it with:
-
-```bash
-python -m utils.generate_opening_book \
-  --pgn processed_games/games_large.pgn \
-  --out utils/opening_suite_large.json \
-  --full_moves 8
-```
-
-This produces the JSON opening set consumed by the tournament runner.
-
-## Step 8 — Evaluate with tournaments against Stockfish
-
-Tournament evaluation is run with `utils.tournament_runner`, which launches the model through `utils/tournament_uci_engine.py` and plays from the generated opening suite.
-
-### Decoder tournament example
-
-```bash
-python -m utils.tournament_runner \
-  --openings_json utils/opening_suite_large.json \
-  --pct 0.004 \
-  --seed 0 \
-  --stockfish /path/to/stockfish \
-  --movetime_ms 10 \
-  --limit_strength \
-  --uci_elo 1500 \
-  --model_uci_py utils/tournament_uci_engine.py \
-  --model_type decoder \
-  --ckpt checkpoints/chess_llm_decoder_v12.pt \
-  --tokenizer_path tokenizers/chess_uci_vocab.json \
-  --n_layers 12 \
-  --write_pgn \
-  --verbose \
-  --greedy
-```
-
-### Encoder tournament example
-
-```bash
-python -m utils.tournament_runner \
-  --openings_json utils/opening_suite_large.json \
-  --pct 0.004 \
-  --seed 0 \
-  --stockfish /path/to/stockfish \
-  --movetime_ms 10 \
-  --limit_strength \
-  --uci_elo 2000 \
-  --model_uci_py utils/tournament_uci_engine.py \
-  --model_type encoder \
-  --version 2 \
-  --ckpt checkpoints/chess_encoder_seq_v2_ep11.pt \
-  --tokenizer_path tokenizers/chess_uci_vocab.json \
-  --n_layers 8 \
-  --write_pgn \
-  --verbose \
-  --greedy
-```
-
-### Notes on tournament evaluation
-
-- `utils/tournament_uci_engine.py` is the UCI bridge used by the tournament runner.
-- `--greedy` is the standard evaluation setting for the main tournament runs.
-- `--write_pgn` stores the played games for later inspection.
-- `--uci_elo` sets the calibrated Stockfish opponent level.
-
-Tournament outputs are typically written to `tournament_out/`.
-
-## Step 9 — Estimate Elo from tournament results
-
-After running tournaments, use `utils.elo_estimator.py` to convert grouped match results against calibrated Stockfish levels into an Elo estimate with uncertainty.
-
-Run:
-
-```bash
-python -m utils.elo_estimator
-```
-
-The script expects grouped results in the form:
-
-```python
-ENCODER_SEQ_MATCHES = [
-    (2000, 386, 342, 384),
-    (2100, 414, 312, 386),
-    (2200, 252, 364, 496),
-]
-```
-
-Each tuple is:
-
-```text
-(opponent_elo, wins, draws, losses)
-```
-
-The output includes:
-
-- estimated Elo
-- standard error
-- 95% confidence interval
-- compact summary values suitable for plots or poster text
-
-
-## Step 10 — Play against the model in a GUI
-
-`utils/uci_engine.py` is the UCI entry point intended for chess GUIs.
-
-A practical workflow is to create a small shell script pointing to the project root and virtual environment, then register that script as a UCI engine in the GUI.
-
-Example:
-
-```bash
-#!/bin/bash
-cd "/absolute/path/to/project_multimodal_gen_ai" || exit 1
-
-"/absolute/path/to/.venv/bin/python" -u -m utils.uci_engine \
-  --model_type encoder \
-  --ckpt "/absolute/path/to/project_multimodal_gen_ai/checkpoints/chess_encoder_seq_v2_ep12.pt" \
-  --temperature 0.5 \
-  --greedy \
-  --n_layers 8 \
-  --version 2 \
-  --device mps
-```
-
-Typical usage:
-
-- `utils.uci_engine` for manual play in a GUI
-- `utils.tournament_uci_engine` for automated tournament play through `utils.tournament_runner`
-
-The repository already includes helper launch scripts such as `run_uci.sh`, `run_uci.ps1`, and model-specific shell wrappers.
-
-## Step 11 — Generate plots and report figures
-
-The plots used in the report are generated with the Python scripts inside `utils/plots/`.
-
-Example:
-
-```bash
-python -m utils.plots.plot_prob_distributions \
-  --cfg configs/distillation_encoder_v9.yaml \
-  --ckpt checkpoints/chess_encoder_seq_v1_07_03_FINAL.pt \
-  --decoder_ckpt checkpoints/chess_llm_decoder_v11.pt \
-  --decoder_tokenizer_path tokenizers/chess_uci_vocab.json \
-  --device mps \
-  --outdir debug_plots
-```
-
-Related analysis utilities are located in:
-
-- `utils/plots/`
-- `utils/elo_estimator.py`
-- other helper scripts in `utils/`
-
-Generated figures can be stored in dedicated output folders such as `debug_plots/`, `debug_plots_final/`, or similar analysis directories.
-
-## Typical end-to-end workflow
-
-A practical full workflow is:
-
-1. create the virtual environment and install dependencies
-2. prepare the PGN, index, and sampled positions files
-3. run the sanity test
-4. train the ViT branch
-5. train the supervised encoder
-6. train the decoder
-7. optionally generate Stockfish supervision data and train the distilled encoder
-8. generate the opening suite
-9. run tournaments against calibrated Stockfish
-10. estimate Elo from the tournament results
-11. inspect PGNs, test the engine in a GUI, and generate final plots
-
-## Main assets already present in the repository
-
-The current repository already contains many reusable assets, including:
-
-- multiple checkpoints in `checkpoints/`
-- final and intermediate configs in `configs/`
-- prepared corpora in `processed_games/`
-- TWIC archives in `twic_zips/`
-- tokenizer files in `tokenizers/`
-- plotting outputs and debugging visualizations in the plot directories
-
-This makes it possible to resume experiments, rerun evaluations, or extend the project without rebuilding everything from scratch.
-
-## Notes on workflow discipline
-
-For stable and reproducible experiments:
-
-- keep commands run from the repository root
-- avoid mixing ad hoc local paths directly into reusable scripts
-- prefer config files over editing code for experiment changes
-- rebuild only the artifacts that actually changed
-- validate the dataset pipeline before long training runs
-- keep tournament outputs, plots, and checkpoints organized by purpose
-
-## Training and evaluation entry points
-
-### Data preparation and validation
-- `python -m utils.prepare_training_files`
-- `python -m dataset.sanity_test`
-
-### Training
-- `python -m train.train_vit_v2`
-- `python -m train.train_encoder_seq`
-- `python -m train.train_chessdecoder`
-- `python -m train.distillation_encoder`
-
-### Evaluation and analysis
-- `python -m utils.generate_opening_book`
-- `python -m utils.tournament_runner`
-- `python -m utils.elo_estimator`
-- `python -m utils.plots.<plot_script>`
-
-### UCI / GUI usage
-- `python -m utils.uci_engine`
-- `python -m utils.tournament_uci_engine`
-
-## TG2 balanced late-game training
-
-TG2 balanced training is integrated as an **optional dataset-level plan**, so the original training configs remain backward compatible. The offline planner selects fixed PGN windows and emits a bit-packed supervision mask; at runtime, masked targets contribute no loss while the decoder still sees their move tokens as causal context.
-
-The reference balanced configs are:
-
-- `configs/chess_encoder_seq_balanced_v1.yaml` (based on `chess_encoder_seq_v2.yaml`)
-- `configs/chess_decoder_player_balanced_v1.yaml` (based on `chess_decoder_player_v12.yaml`)
-
-Run them from the repository root with:
+Balanced variants use the same trainers and an offline supervision plan:
 
 ```bash
 python -m train.train_encoder_seq --config-name chess_encoder_seq_balanced_v1
 python -m train.train_chessdecoder --config-name chess_decoder_player_balanced_v1
+python -m train.train_chessdecoder_board --config-name chess_decoder_player_balanced_board_v1
 ```
 
-The ordinary commands/configs continue to use the legacy unmasked datasets. The balanced configs keep the existing `val_fraction: 0.05`, so training still creates a fresh seeded game/item validation split automatically; no historical validation exclusion is required for this protocol.
+The auxiliary-board variant adds reconstruction targets during training and
+uses the same move policy at inference. Guides:
+[training and checkpoints](docs/training.md),
+[balanced supervision](docs/balanced_training_integration.md),
+[auxiliary board objective](docs/decoder_board_auxiliary.md).
 
-See `docs/balanced_training_integration.md` for the exact runtime contract, decoder off-by-one mapping, fail-fast checks, expected step counts, and testing procedure. See `docs/balanced_training_method.tex` for the methodological/TG2 write-up and `utils/balanced_training_plan.py` for offline plan construction.
+RL launchers use plain YAML through `--config`, independently of Hydra:
+
+```bash
+python -m train.rloo --config configs/rl/rloo_decoder_lichess_mixed_v5_horizon8.yaml
+```
+
+Prepare the selected-position dataset and supervised checkpoint first. See
+[RL configurations](configs/rl/README.md), [RLOO](train/rloo/README.md),
+[GRPO](train/grpo/README.md), and the [Stockfish service](rl_stockfish_service/README.md).
+
+## Evaluate and play
+
+Create an opening suite, then run paired full games:
+
+```bash
+python -m utils.generate_opening_book --pgn processed_games/games_large.pgn \
+  --out utils/opening_suite_large.json --full_moves 8
+python -m utils.tournament_runner_async \
+  --openings_json utils/opening_suite_large.json --pct 0.004 --seed 0 \
+  --stockfish /path/to/stockfish --limit_strength --uci_elo 1500 --movetime_ms 10 \
+  --model_type decoder --ckpt checkpoints/chess_llm_decoder_v12.pt \
+  --tokenizer_path tokenizers/chess_uci_vocab.json --n_layers 12 --greedy \
+  --out_dir tournament_out/decoder_v12_1500 --write_pgn
+```
+
+The sequential runner is `utils.tournament_runner`. Both share the same game
+loop and adjudication. See [asynchronous tournaments](utils/async_tournament/README.md)
+for concurrency budgets and protocol details. Register `run_uci.sh` or
+`run_uci.ps1` in a chess GUI, or invoke `python -m utils.uci_engine --help` directly.
+
+Offline evaluation covers paired checkpoint predictions, decoder-state probes,
+post-RL human-move agreement and time-control policy comparisons. The
+[evaluation guide](docs/evaluation.md) maps each command to its inputs and outputs.
+
+## Maintain and extend
+
+Read [the architecture](docs/architecture.md) for model/data contracts and
+[development](docs/development.md) for tests, submission rules and contribution
+conventions. Existing recipe names and checkpoint parameter names are retained so
+older experiments can still be loaded. Intermediate YAMLs record experiment
+settings; the [config index](configs/README.md) identifies the main entry points.
+
+Saved aggregate outputs live in [results](results/README.md). Full run artifacts
+remain local and can be regenerated with the corresponding evaluation modules.

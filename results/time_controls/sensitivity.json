@@ -1,0 +1,142 @@
+{
+  "excluded_test_games": [
+    "4088e7ef5fe31be465dbdaf95268c6597ab83fe53145ecfb71ed1fae1e98dbba",
+    "518b8db18c803f703f92331eed2cac17d58b010d0e0e64f6fde0ebdf9da5bb21",
+    "6849be4a661284badaa6c1b6decf8657dce72b722aa62f2a9f004bf334e2c24d",
+    "69b9787360cdd370770cfbd399789847a5689ff0e4ce640beb8bb47a7243dde3",
+    "6e454b7269241039275349a8b9187afbd7496f59a600a6fbad3243c835c001df",
+    "750ef1454d38ef4107ee2ae9531ead07bbdfeca57cb00f3bbdc8c4c65675b931"
+  ],
+  "retained_games_by_category": {
+    "classic": 994,
+    "rapid": 637,
+    "blitz": 481
+  },
+  "original_matched_table_reproduced_exactly": true,
+  "original_matched_size_results": {
+    "classic": {
+      "games": 481,
+      "models": {
+        "blitz": {
+          "positions": 44228,
+          "agreement": 0.5217509270145609,
+          "nll": 1.4426195959825492
+        },
+        "classic": {
+          "positions": 44228,
+          "agreement": 0.5478882156100208,
+          "nll": 1.323842635306315
+        },
+        "rapid": {
+          "positions": 44228,
+          "agreement": 0.5234240752464502,
+          "nll": 1.4426045061126351
+        }
+      }
+    },
+    "rapid": {
+      "games": 481,
+      "models": {
+        "blitz": {
+          "positions": 43490,
+          "agreement": 0.5261209473442171,
+          "nll": 1.4194072684518961
+        },
+        "classic": {
+          "positions": 43490,
+          "agreement": 0.5517360312715567,
+          "nll": 1.3070398945864998
+        },
+        "rapid": {
+          "positions": 43490,
+          "agreement": 0.528535295470223,
+          "nll": 1.4069278666515361
+        }
+      }
+    },
+    "blitz": {
+      "games": 481,
+      "models": {
+        "blitz": {
+          "positions": 42592,
+          "agreement": 0.5345839594290007,
+          "nll": 1.4062324395776777
+        },
+        "classic": {
+          "positions": 42592,
+          "agreement": 0.5567477460555973,
+          "nll": 1.3044996019593862
+        },
+        "rapid": {
+          "positions": 42592,
+          "agreement": 0.5338561232156274,
+          "nll": 1.4076614050055525
+        }
+      }
+    }
+  },
+  "conservative_matched_size_results": {
+    "classic": {
+      "games": 481,
+      "models": {
+        "blitz": {
+          "positions": 44239,
+          "agreement": 0.5219376568186442,
+          "nll": 1.4420559315479997
+        },
+        "classic": {
+          "positions": 44239,
+          "agreement": 0.5482718867967178,
+          "nll": 1.3232283742282347
+        },
+        "rapid": {
+          "positions": 44239,
+          "agreement": 0.5235877845340084,
+          "nll": 1.442070870829598
+        }
+      }
+    },
+    "rapid": {
+      "games": 481,
+      "models": {
+        "blitz": {
+          "positions": 43490,
+          "agreement": 0.5261209473442171,
+          "nll": 1.4194072684518961
+        },
+        "classic": {
+          "positions": 43490,
+          "agreement": 0.5517360312715567,
+          "nll": 1.3070398945864998
+        },
+        "rapid": {
+          "positions": 43490,
+          "agreement": 0.528535295470223,
+          "nll": 1.4069278666515361
+        }
+      }
+    },
+    "blitz": {
+      "games": 481,
+      "models": {
+        "blitz": {
+          "positions": 42592,
+          "agreement": 0.5345839594290007,
+          "nll": 1.4062324395776777
+        },
+        "classic": {
+          "positions": 42592,
+          "agreement": 0.5567477460555973,
+          "nll": 1.3044996019593862
+        },
+        "rapid": {
+          "positions": 42592,
+          "agreement": 0.5338561232156274,
+          "nll": 1.4076614050055525
+        }
+      }
+    }
+  },
+  "source_database_opened_read_only": true,
+  "inference_rerun": false
+}

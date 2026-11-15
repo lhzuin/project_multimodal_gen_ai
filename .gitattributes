@@ -1,0 +1,10 @@
+# Keep source hashes stable across platforms.
+* text=auto
+*.py text eol=lf
+*.yaml text eol=lf
+*.md text eol=lf
+*.sh text eol=lf
+*.ps1 text eol=lf
+# Preserve original CSV bytes and checksums, including csv.writer CRLF endings.
+results/**/*.csv -text whitespace=cr-at-eol
+*.xlsx binary

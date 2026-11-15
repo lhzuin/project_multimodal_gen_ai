@@ -1,0 +1,30 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="700" height="410" viewBox="0 0 700 410">
+<rect width="100%" height="100%" fill="white"/>
+<text x="20" y="32" font-family="sans-serif" font-size="20">Complete-move human agreement</text>
+<g font-family="sans-serif" font-size="15">
+<text x="245" y="78" text-anchor="middle">classic</text>
+<text x="390" y="78" text-anchor="middle">rapid</text>
+<text x="535" y="78" text-anchor="middle">blitz</text>
+<text x="15" y="140">classic</text>
+<rect x="175" y="100" width="140" height="75" rx="3" fill="rgb(145,190,250)"/>
+<text x="245" y="143" text-anchor="middle">55.24%</text>
+<rect x="320" y="100" width="140" height="75" rx="3" fill="rgb(140,187,250)"/>
+<text x="390" y="143" text-anchor="middle">55.37%</text>
+<rect x="465" y="100" width="140" height="75" rx="3" fill="rgb(130,181,250)"/>
+<text x="535" y="143" text-anchor="middle">55.67%</text>
+<text x="15" y="225">rapid</text>
+<rect x="175" y="185" width="140" height="75" rx="3" fill="rgb(235,243,250)"/>
+<text x="245" y="228" text-anchor="middle">52.70%</text>
+<rect x="320" y="185" width="140" height="75" rx="3" fill="rgb(226,238,250)"/>
+<text x="390" y="228" text-anchor="middle">52.95%</text>
+<rect x="465" y="185" width="140" height="75" rx="3" fill="rgb(211,229,250)"/>
+<text x="535" y="228" text-anchor="middle">53.39%</text>
+<text x="15" y="310">blitz</text>
+<rect x="175" y="270" width="140" height="75" rx="3" fill="rgb(240,246,250)"/>
+<text x="245" y="313" text-anchor="middle">52.59%</text>
+<rect x="320" y="270" width="140" height="75" rx="3" fill="rgb(232,241,250)"/>
+<text x="390" y="313" text-anchor="middle">52.81%</text>
+<rect x="465" y="270" width="140" height="75" rx="3" fill="rgb(208,227,250)"/>
+<text x="535" y="313" text-anchor="middle">53.46%</text>
+<text x="15" y="395" font-size="12">Columns: held-out test category. See CSV tables for paired game-bootstrap intervals.</text>
+</g></svg>

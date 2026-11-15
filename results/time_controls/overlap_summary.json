@@ -1,0 +1,206 @@
+{
+  "test_games": 2118,
+  "test_category_counts": {
+    "classic": 1000,
+    "rapid": 637,
+    "blitz": 481
+  },
+  "identity": "normalized initial FEN and full mainline UCI sequence; metadata ignored",
+  "distinct_test_games_matching_any_policy_reservoir": 6,
+  "distinct_test_games_matching_training_or_checkpoint_selection": 0,
+  "conclusion": "0 test games match selected training or checkpoint-selection games; 6 match the broader candidate reservoirs. Distinguish direct model exposure from candidate-pool membership.",
+  "models": {
+    "classic": {
+      "reservoir_games": 920355,
+      "training_plan_games": 176930,
+      "checkpoint_selection_games": 9312,
+      "overlap_counts": {
+        "entire_reservoir": {
+          "classic": 6,
+          "rapid": 0,
+          "blitz": 0
+        },
+        "training": {
+          "classic": 0,
+          "rapid": 0,
+          "blitz": 0
+        },
+        "checkpoint_selection": {
+          "classic": 0,
+          "rapid": 0,
+          "blitz": 0
+        }
+      },
+      "confirmed_matches": [
+        {
+          "test_game_id": "518b8db18c803f703f92331eed2cac17d58b010d0e0e64f6fde0ebdf9da5bb21",
+          "test_category": "classic",
+          "reservoir_game_id": 11197,
+          "role": "unselected_reservoir"
+        },
+        {
+          "test_game_id": "6e454b7269241039275349a8b9187afbd7496f59a600a6fbad3243c835c001df",
+          "test_category": "classic",
+          "reservoir_game_id": 102903,
+          "role": "unselected_reservoir"
+        },
+        {
+          "test_game_id": "69b9787360cdd370770cfbd399789847a5689ff0e4ce640beb8bb47a7243dde3",
+          "test_category": "classic",
+          "reservoir_game_id": 137390,
+          "role": "unselected_reservoir"
+        },
+        {
+          "test_game_id": "4088e7ef5fe31be465dbdaf95268c6597ab83fe53145ecfb71ed1fae1e98dbba",
+          "test_category": "classic",
+          "reservoir_game_id": 167882,
+          "role": "unselected_reservoir"
+        },
+        {
+          "test_game_id": "6849be4a661284badaa6c1b6decf8657dce72b722aa62f2a9f004bf334e2c24d",
+          "test_category": "classic",
+          "reservoir_game_id": 225295,
+          "role": "unselected_reservoir"
+        },
+        {
+          "test_game_id": "750ef1454d38ef4107ee2ae9531ead07bbdfeca57cb00f3bbdc8c4c65675b931",
+          "test_category": "classic",
+          "reservoir_game_id": 225324,
+          "role": "unselected_reservoir"
+        },
+        {
+          "test_game_id": "6849be4a661284badaa6c1b6decf8657dce72b722aa62f2a9f004bf334e2c24d",
+          "test_category": "classic",
+          "reservoir_game_id": 255021,
+          "role": "unselected_reservoir"
+        },
+        {
+          "test_game_id": "6849be4a661284badaa6c1b6decf8657dce72b722aa62f2a9f004bf334e2c24d",
+          "test_category": "classic",
+          "reservoir_game_id": 272031,
+          "role": "unselected_reservoir"
+        },
+        {
+          "test_game_id": "6849be4a661284badaa6c1b6decf8657dce72b722aa62f2a9f004bf334e2c24d",
+          "test_category": "classic",
+          "reservoir_game_id": 387063,
+          "role": "unselected_reservoir"
+        },
+        {
+          "test_game_id": "750ef1454d38ef4107ee2ae9531ead07bbdfeca57cb00f3bbdc8c4c65675b931",
+          "test_category": "classic",
+          "reservoir_game_id": 551286,
+          "role": "unselected_reservoir"
+        },
+        {
+          "test_game_id": "6849be4a661284badaa6c1b6decf8657dce72b722aa62f2a9f004bf334e2c24d",
+          "test_category": "classic",
+          "reservoir_game_id": 574815,
+          "role": "unselected_reservoir"
+        },
+        {
+          "test_game_id": "750ef1454d38ef4107ee2ae9531ead07bbdfeca57cb00f3bbdc8c4c65675b931",
+          "test_category": "classic",
+          "reservoir_game_id": 612950,
+          "role": "unselected_reservoir"
+        },
+        {
+          "test_game_id": "6849be4a661284badaa6c1b6decf8657dce72b722aa62f2a9f004bf334e2c24d",
+          "test_category": "classic",
+          "reservoir_game_id": 698823,
+          "role": "unselected_reservoir"
+        },
+        {
+          "test_game_id": "6849be4a661284badaa6c1b6decf8657dce72b722aa62f2a9f004bf334e2c24d",
+          "test_category": "classic",
+          "reservoir_game_id": 728875,
+          "role": "unselected_reservoir"
+        },
+        {
+          "test_game_id": "6849be4a661284badaa6c1b6decf8657dce72b722aa62f2a9f004bf334e2c24d",
+          "test_category": "classic",
+          "reservoir_game_id": 913160,
+          "role": "unselected_reservoir"
+        }
+      ]
+    },
+    "rapid": {
+      "reservoir_games": 137349,
+      "training_plan_games": 88465,
+      "checkpoint_selection_games": 4656,
+      "overlap_counts": {
+        "entire_reservoir": {
+          "classic": 2,
+          "rapid": 0,
+          "blitz": 0
+        },
+        "training": {
+          "classic": 0,
+          "rapid": 0,
+          "blitz": 0
+        },
+        "checkpoint_selection": {
+          "classic": 0,
+          "rapid": 0,
+          "blitz": 0
+        }
+      },
+      "confirmed_matches": [
+        {
+          "test_game_id": "750ef1454d38ef4107ee2ae9531ead07bbdfeca57cb00f3bbdc8c4c65675b931",
+          "test_category": "classic",
+          "reservoir_game_id": 33227,
+          "role": "unselected_reservoir"
+        },
+        {
+          "test_game_id": "6849be4a661284badaa6c1b6decf8657dce72b722aa62f2a9f004bf334e2c24d",
+          "test_category": "classic",
+          "reservoir_game_id": 72640,
+          "role": "unselected_reservoir"
+        },
+        {
+          "test_game_id": "6849be4a661284badaa6c1b6decf8657dce72b722aa62f2a9f004bf334e2c24d",
+          "test_category": "classic",
+          "reservoir_game_id": 111342,
+          "role": "unselected_reservoir"
+        },
+        {
+          "test_game_id": "6849be4a661284badaa6c1b6decf8657dce72b722aa62f2a9f004bf334e2c24d",
+          "test_category": "classic",
+          "reservoir_game_id": 114847,
+          "role": "unselected_reservoir"
+        },
+        {
+          "test_game_id": "750ef1454d38ef4107ee2ae9531ead07bbdfeca57cb00f3bbdc8c4c65675b931",
+          "test_category": "classic",
+          "reservoir_game_id": 128641,
+          "role": "unselected_reservoir"
+        }
+      ]
+    },
+    "blitz": {
+      "reservoir_games": 132136,
+      "training_plan_games": 88465,
+      "checkpoint_selection_games": 4656,
+      "overlap_counts": {
+        "entire_reservoir": {
+          "classic": 0,
+          "rapid": 0,
+          "blitz": 0
+        },
+        "training": {
+          "classic": 0,
+          "rapid": 0,
+          "blitz": 0
+        },
+        "checkpoint_selection": {
+          "classic": 0,
+          "rapid": 0,
+          "blitz": 0
+        }
+      },
+      "confirmed_matches": []
+    }
+  },
+  "source_sha256": "5fcfeb8ba63b947e50a746a33c954853ce4e50f6d95f592c9617e9cfa58d5150"
+}
