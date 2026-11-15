@@ -1,4 +1,4 @@
-# chess_decoder_player.py
+"""Causal move policy shared by supervised training, RL and state probes."""
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -65,6 +65,27 @@ class ChessDecoderPlayer(nn.Module):
         start_turn: [B] 0/1 (optional)
         returns logits: [B,T,V]
         """
+        features = self.forward_features(
+            input_ids=input_ids, attention_mask=attention_mask,
+            start_turn=start_turn, piece_input_ids=piece_input_ids,
+            capture_layers=capture_layers,
+        )
+        h, captured = (features, None) if capture_layers is None else features
+        result = {"logits": self.lm_head(h), "piece_logits": self.piece_head(h)}
+        if captured is not None:
+            result["hidden_states"] = captured
+        return result
+
+    def forward_features(
+        self, input_ids, attention_mask=None, start_turn=None,
+        piece_input_ids=None, capture_layers=None,
+    ):
+        """Return policy features, optionally with numbered block captures.
+
+        The final layer capture includes normalization and turn embedding, so
+        probes and auxiliary heads consume exactly the features of the move head.
+        Parameter names and checkpoint shapes are unchanged.
+        """
         decoder_output = self.decoder(
             input_ids=input_ids, attention_mask=attention_mask,
             piece_input_ids=piece_input_ids, capture_layers=capture_layers,
@@ -81,17 +102,13 @@ class ChessDecoderPlayer(nn.Module):
             parity = (start_turn.view(B, 1) + t) % 2
             h = h + self.turn_emb(parity)
 
-        move_logits = self.lm_head(h)            # [B,T,Vmove]
-        piece_logits = self.piece_head(h)        # [B,T,Vpiece]
-        result = {"logits": move_logits, "piece_logits": piece_logits}
         if captured is not None:
             # The final captured state is exactly the normalized, turn-adjusted
             # representation consumed by both policy heads. Earlier captures
             # are the outputs of their numbered transformer blocks.
             if len(self.decoder.layers) in captured:
                 captured[len(self.decoder.layers)] = h
-            result["hidden_states"] = captured
-        return result
+        return h if capture_layers is None else (h, captured)
 
     # ---------- Legal mask over vocab ----------
     def legal_token_mask_from_fen(self, fen_list, device=None):

@@ -1,28 +1,13 @@
-
-
-# DO --> chmod +x run_uci.sh
-# RUN --> ./run_uci.sh
-
-
 #!/usr/bin/env bash
+# Register this script as a UCI engine; set CHECKPOINT/MODEL_TYPE as needed.
 set -euo pipefail
-
 PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-
-# Option A: use the project's venv (recommended if they created one)
-PYTHON="$PROJECT_ROOT/venv/bin/python"
-
-# Option B: fallback to system python3 if no venv exists
-if [[ ! -x "$PYTHON" ]]; then
-  PYTHON="python3"
-fi
-
-CKPT="$PROJECT_ROOT/checkpoints/chess_llm_decoder_v3.pt"
-TOKENIZER="$PROJECT_ROOT/tokenizers/chess_uci_vocab.json"
-
+PYTHON="${PYTHON_EXECUTABLE:-$PROJECT_ROOT/.venv/bin/python}"
+if [[ ! -x "$PYTHON" ]]; then PYTHON=python3; fi
+MODEL_TYPE="${MODEL_TYPE:-decoder}"
+CHECKPOINT="${CHECKPOINT:-$PROJECT_ROOT/checkpoints/chess_llm_decoder_v12.pt}"
+N_LAYERS="${N_LAYERS:-12}"
 cd "$PROJECT_ROOT"
-
-"$PYTHON" -u -m utils.uci_engine \
-  --model_type decoder \
-  --ckpt "$CKPT" \
-  --tokenizer_path "$TOKENIZER"
+exec "$PYTHON" -u -m utils.uci_engine \
+  --model_type "$MODEL_TYPE" --ckpt "$CHECKPOINT" --n_layers "$N_LAYERS" \
+  --tokenizer_path "$PROJECT_ROOT/tokenizers/chess_uci_vocab.json" "$@"

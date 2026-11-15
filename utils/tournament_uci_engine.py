@@ -30,7 +30,7 @@ import argparse
 import chess
 import torch
 
-from models.chess_decoder_player import ChessDecoderPlayer
+from models.checkpoints import load_decoder_player
 from models.chess_encoder_player import ChessEncoderPlayer
 from models.chess_encoder_player import ChessEncoderPlayerV2
 
@@ -138,12 +138,12 @@ def main():
         if not args.tokenizer_path:
             raise SystemExit("--tokenizer_path required for decoder")
 
-        player = ChessDecoderPlayer(
+        player = load_decoder_player(
+            sd,
             tokenizer_path=args.tokenizer_path,
             max_seq_len=args.max_seq_len,
             n_layers=args.n_layers,
         )
-        player.load_state_dict(sd, strict=True)
         player.eval().to(device)
         tok = player.decoder.tokenizer
 

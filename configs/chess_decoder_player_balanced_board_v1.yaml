@@ -1,0 +1,41 @@
+# Inherit balanced v1's architecture, data plans, optimizer and training settings.
+defaults:
+  - chess_decoder_player_balanced_v1
+  - _self_
+
+experiment_name: "chess_llm_decoder_balanced_board_v1"
+
+# Start from random weights. Set checkpoint_load_path=auto/path only to resume
+# this variant; no balanced-v1 weights are loaded by the default configuration.
+checkpoint_load_path: null
+
+auxiliary_board:
+  loss_weight: 0.30  # board fraction; current objective gets 1 - loss_weight
+  normalization: uniform  # divide each objective by its uniform-prediction CE
+
+collate:
+  _target_: dataset.collate_llm_board.CollateLLMBoardMoves
+
+dataset_train:
+  _target_: dataset.pgn_move_board_dataset.PGNMoveBoardDataset
+
+dataset_val:
+  _target_: dataset.pgn_move_board_dataset.PGNMoveBoardDataset
+
+model:
+  instance:
+    _target_: models.chess_decoder_board_player.ChessDecoderBoardPlayer
+
+train_stages:
+  - name: stage1
+    epochs: 25
+    warmup_fraction: 0.05
+    lr_scheduler: cosine
+    groups:
+      decoder: lr_dec
+      lm_head: lr_head
+      piece_head: lr_piece
+      board_head: lr_board
+
+optim:
+  lr_board: ${optim.lr_piece}
